@@ -6,7 +6,8 @@ export type PostStatus =
   | "publishing"
   | "published"
   | "partial"
-  | "failed";
+  | "failed"
+  | "pending";
 
 export type Platform = "linkedin" | "instagram" | "facebook" | "x" | "tiktok";
 
