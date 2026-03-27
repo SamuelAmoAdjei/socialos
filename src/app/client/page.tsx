@@ -270,3 +270,4 @@ function CheckIco() {
     <path d="M4 10l4 4 8-8"/>
   </svg>;
 }
+

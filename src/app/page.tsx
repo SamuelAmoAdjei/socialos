@@ -7,3 +7,4 @@ export default async function RootPage() {
   if (session) redirect("/dashboard");
   redirect("/auth/signin");
 }
+
