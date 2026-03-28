@@ -69,7 +69,23 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const notifRef    = useRef<HTMLDivElement>(null);
   const notifBtnRef = useRef<HTMLButtonElement>(null);
 
-  /* Clients — loaded from API for the sidebar switcher */
+  /* Schedule badge — live count of approved/pending posts */
+  const [scheduleBadge, setScheduleBadge] = useState<number>(0);
+  useEffect(() => {
+    function loadBadge() {
+      fetch("/api/posts").then(r=>r.json()).then(res=>{
+        if (res.ok) {
+          const count = res.data.filter((p:any) =>
+            p.status === "approved" || p.status === "pending"
+          ).length;
+          setScheduleBadge(count);
+        }
+      }).catch(()=>{});
+    }
+    loadBadge();
+    const id = setInterval(loadBadge, 30_000);
+    return () => clearInterval(id);
+  }, []);
   const [clients,     setClients]     = useState<{id:string;name:string}[]>([]);
   const [activeClient,setActiveClient]= useState<string>("");
 
@@ -91,9 +107,17 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     return () => document.removeEventListener("mousedown", h);
   }, []);
 
-  /* Auth guard */
+  /* Auth guard — VA only */
   useEffect(() => {
-    if (status === "unauthenticated") router.replace("/auth/signin");
+    if (status === "unauthenticated") { router.replace("/auth/signin"); return; }
+    if (status === "authenticated") {
+      // Check role
+      fetch("/api/role").then(r=>r.json()).then(res=>{
+        if (res.role === "client") router.replace("/client");
+        else if (res.role === "none") router.replace("/auth/signin?error=AccessDenied");
+        // role === "va" → stay here
+      }).catch(()=>{}); // if role check fails, allow through (graceful degradation)
+    }
   }, [status, router]);
 
   /* Close mobile nav on route change */
@@ -150,7 +174,9 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
                     <span className="nav-icon"><item.Icon active={active} /></span>
                     <span className="nav-label">{item.label}</span>
                     {"badge" in item && item.badge &&
-                      <span className="nav-badge">{item.badge}</span>}
+                      <span className="nav-badge">
+                        {item.href === "/dashboard/schedule" ? (scheduleBadge > 0 ? scheduleBadge : null) : item.badge}
+                      </span>}
                   </button>
                 );
               })}

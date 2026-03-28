@@ -1,71 +1,130 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { PLATFORM_META, type Platform, type Post, type PostStatus } from "@/types";
 
 const FILTERS: { label:string; value:PostStatus|"all" }[] = [
-  { label:"All Posts",   value:"all"       },
-  { label:"Scheduled",   value:"scheduled" },
-  { label:"Published",   value:"published" },
-  { label:"Drafts",      value:"draft"     },
-  { label:"Pending",     value:"approved"  },
-  { label:"Failed",      value:"failed"    },
+  { label:"All Posts",  value:"all"       },
+  { label:"Scheduled",  value:"scheduled" },
+  { label:"Published",  value:"published" },
+  { label:"Drafts",     value:"draft"     },
+  { label:"Pending",    value:"approved"  },
+  { label:"Failed",     value:"failed"    },
 ];
 
 const PILL: Record<string,string> = {
   published:"pill-published", scheduled:"pill-scheduled",
   approved:"pill-approved",   publishing:"pill-publishing",
-  partial:"pill-partial",     draft:"pill-draft", failed:"pill-failed",
+  partial:"pill-partial",     draft:"pill-draft",
+  failed:"pill-failed",       pending:"pill-pending",
 };
 
 export default function SchedulePage() {
   const router = useRouter();
-  const [posts,    setPosts]    = useState<(Post & { rowIndex:number })[]>([]);
+  const [posts,    setPosts]    = useState<(Post & {rowIndex:number})[]>([]);
   const [loading,  setLoading]  = useState(true);
   const [filter,   setFilter]   = useState<PostStatus|"all">("all");
-  const [selected, setSelected] = useState<Post|null>(null);
+  const [selected, setSelected] = useState<(Post & {rowIndex:number})|null>(null);
+  const [deleting, setDeleting] = useState<string|null>(null);
+  const [toast,    setToast]    = useState<{msg:string;ok:boolean}|null>(null);
 
-  useEffect(() => {
-    fetch("/api/posts")
-      .then(r => r.json())
-      .then(res => { if (res.ok) setPosts(res.data); })
-      .finally(() => setLoading(false));
+  const load = useCallback(() => {
+    fetch("/api/posts").then(r=>r.json())
+      .then(res=>{ if(res.ok) setPosts(res.data); })
+      .finally(()=>setLoading(false));
   }, []);
 
-  const filtered = filter === "all" ? posts : posts.filter(p => p.status === filter);
+  useEffect(() => {
+    load();
+    const id = setInterval(load, 20_000);
+    return () => clearInterval(id);
+  }, [load]);
+
+  function showToast(msg:string, ok:boolean) {
+    setToast({msg,ok});
+    setTimeout(()=>setToast(null),3500);
+  }
+
+  async function deletePost(post: Post & {rowIndex:number}) {
+    if (!window.confirm(`Delete this post?\n\n"${post.content.substring(0,80)}…"`)) return;
+    setDeleting(post.id);
+    try {
+      const res = await fetch("/api/posts/delete",{
+        method:"DELETE", headers:{"Content-Type":"application/json"},
+        body: JSON.stringify({ rowIndex: post.rowIndex }),
+      }).then(r=>r.json());
+      if (res.ok) {
+        setPosts(p=>p.filter(x=>x.id!==post.id));
+        setSelected(null);
+        showToast("Post deleted","true" as any);
+      } else {
+        showToast(res.error||"Delete failed", false);
+      }
+    } finally { setDeleting(null); }
+  }
+
+  const filtered = filter === "all" ? posts : posts.filter(p=>p.status===filter);
 
   return (
-    <div>
-      {/* Header */}
+    <div style={{position:"relative"}}>
+
+      {/* Toast */}
+      {toast && (
+        <div style={{
+          position:"fixed",bottom:24,right:24,zIndex:600,
+          padding:"12px 20px",borderRadius:"var(--radius-md)",
+          background:"var(--bg-card)",border:`1px solid ${toast.ok?"rgba(34,197,94,0.3)":"rgba(239,68,68,0.3)"}`,
+          boxShadow:"var(--shadow-md)",fontSize:"0.85rem",fontWeight:500,
+          color:toast.ok?"var(--success)":"var(--danger)",
+          animation:"toastIn 0.3s var(--ease)",
+        }}>{toast.msg}</div>
+      )}
+
       <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:20}}>
         <div>
           <h1 className="page-title">Post Queue</h1>
-          <p className="page-subtitle">{posts.length} total posts across all clients</p>
+          <p className="page-subtitle">{posts.length} total posts · auto-refreshes every 20s</p>
         </div>
-        <button className="btn btn-primary"
-          onClick={() => router.push("/dashboard/compose")}>
-          <PlusIco/> New Post
-        </button>
+        <div style={{display:"flex",gap:8}}>
+          <button className="btn btn-secondary btn-sm" onClick={load}>
+            <RefreshIco/> Refresh
+          </button>
+          <button className="btn btn-primary" onClick={()=>router.push("/dashboard/compose")}>
+            <PlusIco/> New Post
+          </button>
+        </div>
       </div>
 
       {/* Filter pills */}
       <div style={{display:"flex",gap:6,marginBottom:16,flexWrap:"wrap"}}>
-        {FILTERS.map(f => (
-          <button key={f.value}
-            onClick={() => setFilter(f.value)}
-            style={{
-              padding:"7px 16px", borderRadius:20,
-              fontSize:"0.78rem", fontWeight:500,
+        {FILTERS.map(f=>{
+          const count = f.value==="all" ? posts.length : posts.filter(p=>p.status===f.value).length;
+          return (
+            <button key={f.value} onClick={()=>setFilter(f.value)} style={{
+              padding:"7px 14px",borderRadius:20,
+              fontSize:"0.78rem",fontWeight:500,
               border:`1px solid ${filter===f.value?"var(--accent)":"var(--border)"}`,
-              background: filter===f.value ? "var(--accent-dim)" : "var(--bg-input)",
-              color: filter===f.value ? "var(--accent)" : "var(--text-2)",
-              cursor:"pointer", fontFamily:"var(--font-body)",
+              background:filter===f.value?"var(--accent-dim)":"var(--bg-input)",
+              color:filter===f.value?"var(--accent)":"var(--text-2)",
+              cursor:"pointer",fontFamily:"var(--font-body)",
               transition:"all var(--t-fast) var(--ease)",
+              display:"flex",alignItems:"center",gap:6,
             }}>
-            {f.label}
-          </button>
-        ))}
+              {f.label}
+              {count > 0 && (
+                <span style={{
+                  fontSize:"0.62rem",fontWeight:700,
+                  padding:"1px 5px",borderRadius:10,
+                  background:filter===f.value?"var(--accent)":"var(--border-md)",
+                  color:filter===f.value?"#0B0F1A":"var(--text-2)",
+                }}>
+                  {count}
+                </span>
+              )}
+            </button>
+          );
+        })}
       </div>
 
       {/* Post list */}
@@ -73,79 +132,140 @@ export default function SchedulePage() {
         {loading && (
           <div className="empty-state">
             <div className="spinner spinner-lg"/>
-            <p style={{marginTop:16,color:"var(--text-3)",fontSize:"0.875rem"}}>Loading posts from your Google Sheet…</p>
+            <p style={{marginTop:16,color:"var(--text-3)",fontSize:"0.875rem"}}>
+              Loading posts from your Google Sheet…
+            </p>
           </div>
         )}
-        {!loading && filtered.length === 0 && (
+        {!loading && filtered.length===0 && (
           <div className="empty-state">
-            <div className="empty-icon">
-              <CalIco/>
-            </div>
-            <div className="empty-title">No posts yet</div>
-            <p className="empty-desc">Create your first post to see it here.</p>
-            <button className="btn btn-primary"
-              onClick={() => router.push("/dashboard/compose")}>
+            <div className="empty-icon"><CalIco/></div>
+            <div className="empty-title">No posts found</div>
+            <p className="empty-desc">
+              {filter==="all"
+                ? "Create your first post to see it here."
+                : `No posts with status "${filter}".`}
+            </p>
+            <button className="btn btn-primary btn-sm"
+              onClick={()=>router.push("/dashboard/compose")}>
               <PlusIco/> Compose a post
             </button>
           </div>
         )}
         {!loading && filtered.map((post,i) => (
-          <div key={post.id} className="post-item"
-            onClick={() => setSelected(post)}>
-            <div className="plat-dots">
-              {post.platforms.map(p => (
+          <div key={post.id} style={{
+            display:"flex",alignItems:"flex-start",gap:12,
+            padding:"14px 20px",borderBottom: i<filtered.length-1 ? "1px solid var(--border)" : "none",
+            transition:"background var(--t-fast) var(--ease)",cursor:"pointer",
+          }}
+          onMouseEnter={e=>(e.currentTarget.style.background="var(--bg-hover)")}
+          onMouseLeave={e=>(e.currentTarget.style.background="")}
+          onClick={()=>setSelected(post)}>
+
+            <div className="plat-dots" style={{marginTop:2}}>
+              {post.platforms.slice(0,3).map(p=>(
                 <div key={p} className="plat-dot"
-                  style={{background:PLATFORM_META[p as Platform]?.bg ?? "var(--bg-input)",color:PLATFORM_META[p as Platform]?.color ?? "var(--text-3)"}}>
-                  {PLATFORM_META[p as Platform]?.short ?? p.substring(0,2).toUpperCase()}
+                  style={{background:PLATFORM_META[p as Platform]?.bg??"var(--bg-input)",color:PLATFORM_META[p as Platform]?.color??"var(--text-3)"}}>
+                  {PLATFORM_META[p as Platform]?.short??p.substring(0,2).toUpperCase()}
                 </div>
               ))}
             </div>
+
             <div className="post-body">
-              <div className="post-preview">{post.content || "(no content)"}</div>
+              <div className="post-preview">{post.content||"(no content)"}</div>
               <div className="post-meta">
                 <span>{post.clientId}</span>
                 {post.scheduledAt && <span>{new Date(post.scheduledAt).toLocaleString()}</span>}
-                <span>{post.platforms.length} platform{post.platforms.length !== 1 ? "s" : ""}</span>
+                <span>{post.platforms.length} platform{post.platforms.length!==1?"s":""}</span>
               </div>
             </div>
-            <span className={`pill ${PILL[post.status] ?? "pill-draft"}`}>{post.status}</span>
+
+            <div style={{display:"flex",alignItems:"center",gap:8,flexShrink:0}}>
+              <span className={`pill ${PILL[post.status]??"pill-draft"}`}>{post.status}</span>
+              <button
+                onClick={e=>{e.stopPropagation();deletePost(post);}}
+                disabled={deleting===post.id}
+                title="Delete post"
+                style={{
+                  width:28,height:28,borderRadius:"var(--radius-xs)",
+                  display:"flex",alignItems:"center",justifyContent:"center",
+                  background:"none",border:"1px solid var(--border)",
+                  color:"var(--text-3)",cursor:"pointer",flexShrink:0,
+                  transition:"all var(--t-fast) var(--ease)",
+                }}
+                onMouseEnter={e=>{e.currentTarget.style.borderColor="var(--danger)";e.currentTarget.style.color="var(--danger)";}}
+                onMouseLeave={e=>{e.currentTarget.style.borderColor="var(--border)";e.currentTarget.style.color="var(--text-3)";}}
+              >
+                {deleting===post.id ? <span className="spinner" style={{width:12,height:12}}/> : <TrashIco/>}
+              </button>
+            </div>
           </div>
         ))}
       </div>
 
       {/* Detail modal */}
       {selected && (
-        <div className="modal-backdrop" onClick={() => setSelected(null)}>
-          <div className="modal" onClick={e => e.stopPropagation()}>
+        <div className="modal-backdrop" onClick={()=>setSelected(null)}>
+          <div className="modal" onClick={e=>e.stopPropagation()}>
             <div className="modal-head">
               <span className="modal-title">Post Details</span>
               <button style={{background:"none",border:"none",cursor:"pointer",color:"var(--text-3)",fontSize:"1.1rem"}}
-                onClick={() => setSelected(null)}>✕</button>
+                onClick={()=>setSelected(null)}>✕</button>
             </div>
             <div className="modal-body">
               <div style={{display:"flex",gap:8,marginBottom:14,alignItems:"center",flexWrap:"wrap"}}>
-                {selected.platforms.map(p => (
-                  <div key={p} style={{width:28,height:28,borderRadius:8,display:"flex",alignItems:"center",justifyContent:"center",fontSize:"0.72rem",fontWeight:700,background:PLATFORM_META[p as Platform]?.bg,color:PLATFORM_META[p as Platform]?.color}}>
+                {selected.platforms.map(p=>(
+                  <div key={p} style={{
+                    width:28,height:28,borderRadius:8,
+                    display:"flex",alignItems:"center",justifyContent:"center",
+                    fontSize:"0.72rem",fontWeight:700,
+                    background:PLATFORM_META[p as Platform]?.bg,
+                    color:PLATFORM_META[p as Platform]?.color,
+                  }}>
                     {PLATFORM_META[p as Platform]?.short}
                   </div>
                 ))}
-                <span className={`pill ${PILL[selected.status] ?? "pill-draft"}`}
+                <span className={`pill ${PILL[selected.status]??"pill-draft"}`}
                   style={{marginLeft:"auto"}}>{selected.status}</span>
               </div>
-              <p style={{fontSize:"0.88rem",lineHeight:1.7,marginBottom:16,color:"var(--text-1)"}}>{selected.content}</p>
+
+              <div style={{
+                padding:"12px 14px",background:"var(--bg-input)",
+                borderRadius:"var(--radius-sm)",border:"1px solid var(--border)",
+                fontSize:"0.88rem",lineHeight:1.75,color:"var(--text-1)",marginBottom:16,
+              }}>
+                {selected.content}
+              </div>
+
               <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
-                {([["Client",selected.clientId],["Scheduled",selected.scheduledAt?new Date(selected.scheduledAt).toLocaleString():"—"],["Published",selected.publishedAt?new Date(selected.publishedAt).toLocaleString():"—"],["Error",selected.errorMsg||"—"]] as [string,string][]).map(([k,v]) => (
-                  <div key={k} style={{padding:"10px 12px",background:"var(--bg-input)",borderRadius:"var(--radius-sm)",border:"1px solid var(--border)"}}>
+                {([
+                  ["Client",    selected.clientId],
+                  ["Scheduled", selected.scheduledAt ? new Date(selected.scheduledAt).toLocaleString() : "—"],
+                  ["Published", selected.publishedAt ? new Date(selected.publishedAt).toLocaleString() : "—"],
+                  ["Error",     selected.errorMsg || "—"],
+                ] as [string,string][]).map(([k,v])=>(
+                  <div key={k} style={{
+                    padding:"10px 12px",background:"var(--bg-input)",
+                    borderRadius:"var(--radius-sm)",border:"1px solid var(--border)",
+                  }}>
                     <div style={{fontSize:"0.68rem",textTransform:"uppercase",letterSpacing:".06em",color:"var(--text-3)",marginBottom:3}}>{k}</div>
-                    <div style={{fontSize:"0.85rem",fontWeight:500,color:k==="Error"&&v!=="—"?"var(--danger)":"var(--text-1)"}}>{v}</div>
+                    <div style={{fontSize:"0.85rem",fontWeight:500,
+                      color:k==="Error"&&v!=="—"?"var(--danger)":"var(--text-1)"}}>{v}</div>
                   </div>
                 ))}
               </div>
             </div>
-            <div className="modal-foot">
-              <button className="btn btn-secondary" onClick={() => setSelected(null)}>Close</button>
-              <button className="btn btn-primary" onClick={() => {router.push("/dashboard/compose");setSelected(null);}}>
-                Duplicate Post
+            <div className="modal-foot" style={{gap:8}}>
+              <button className="btn btn-danger btn-sm"
+                disabled={deleting===selected.id}
+                onClick={()=>deletePost(selected)}>
+                <TrashIco/> Delete
+              </button>
+              <div style={{flex:1}}/>
+              <button className="btn btn-secondary" onClick={()=>setSelected(null)}>Close</button>
+              <button className="btn btn-primary"
+                onClick={()=>{router.push("/dashboard/compose");setSelected(null);}}>
+                Duplicate
               </button>
             </div>
           </div>
@@ -155,6 +275,8 @@ export default function SchedulePage() {
   );
 }
 
-const ico = {width:18,height:18,viewBox:"0 0 20 20",fill:"none",stroke:"currentColor",strokeWidth:1.8,strokeLinecap:"round" as const};
-function CalIco()  { return <svg {...ico}><rect x="2" y="4" width="16" height="14" rx="2"/><path d="M14 2v4M6 2v4M2 8h16"/></svg>; }
-function PlusIco() { return <svg {...ico}><path d="M10 4v12M4 10h12"/></svg>; }
+const ico={width:16,height:16,viewBox:"0 0 20 20",fill:"none",stroke:"currentColor",strokeWidth:1.8,strokeLinecap:"round" as const};
+function CalIco()     { return <svg {...ico} style={{width:20,height:20}}><rect x="2" y="4" width="16" height="14" rx="2"/><path d="M14 2v4M6 2v4M2 8h16"/></svg>; }
+function PlusIco()    { return <svg {...ico}><path d="M10 4v12M4 10h12"/></svg>; }
+function TrashIco()   { return <svg {...ico}><path d="M4 6h12M8 6V4h4v2M7 6v10h6V6"/></svg>; }
+function RefreshIco() { return <svg {...ico}><path d="M4 12a6 6 0 1 0 1-4M4 4v4h4"/></svg>; }
