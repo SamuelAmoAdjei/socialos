@@ -68,6 +68,19 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const [notifOpen, setNotifOpen] = useState(false);
   const notifRef    = useRef<HTMLDivElement>(null);
   const notifBtnRef = useRef<HTMLButtonElement>(null);
+
+  /* Clients — loaded from API for the sidebar switcher */
+  const [clients,     setClients]     = useState<{id:string;name:string}[]>([]);
+  const [activeClient,setActiveClient]= useState<string>("");
+
+  useEffect(() => {
+    fetch("/api/clients").then(r=>r.json()).then(res=>{
+      if (res.ok && res.data.length > 0) {
+        setClients(res.data.map((c:any)=>({id:c.id,name:c.name})));
+        setActiveClient(res.data[0].id);
+      }
+    }).catch(()=>{});
+  }, []);
   useEffect(() => {
     function h(e: MouseEvent) {
       if (!notifRef.current?.contains(e.target as Node) &&
@@ -157,15 +170,18 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           </button>
           <div className="client-widget">
             <div className="client-label-sm">Active Client</div>
-            <select className="client-select">
-              <option>Acme Corp</option>
-              <option>Nova Brands</option>
-              <option>Petal Studio</option>
-              <option>+ Add Client</option>
+            <select className="client-select" value={activeClient}
+              onChange={e => setActiveClient(e.target.value)}>
+              {clients.length === 0
+                ? <option value="">No clients yet</option>
+                : clients.map(c => <option key={c.id} value={c.id}>{c.name}</option>)
+              }
             </select>
             <div className="client-status-row">
               <div className="status-pulse"/>
-              <span className="status-text-sm">3 posts scheduled this week</span>
+              <span className="status-text-sm">
+                {clients.length === 0 ? "Add a client in Clients page" : `${clients.length} client${clients.length!==1?"s":""} registered`}
+              </span>
             </div>
           </div>
         </div>
