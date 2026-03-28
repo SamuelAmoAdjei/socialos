@@ -1,15 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
-import { getClients, createClient } from "@/lib/sheets";
+import { getSettings, updateSettings } from "@/lib/sheets";
 import type { ApiResult } from "@/types";
 
 export async function GET() {
   const session = await getServerSession(authOptions);
   if (!session) return NextResponse.json({ ok:false, error:"Unauthorised" }, { status:401 });
   try {
-    const clients = await getClients((session as any).accessToken);
-    return NextResponse.json<ApiResult>({ ok:true, data:clients });
+    const settings = await getSettings((session as any).accessToken);
+    return NextResponse.json<ApiResult>({ ok:true, data:settings });
   } catch (err:any) {
     return NextResponse.json<ApiResult>({ ok:false, error:err.message }, { status:500 });
   }
@@ -20,16 +20,8 @@ export async function POST(req: NextRequest) {
   if (!session) return NextResponse.json({ ok:false, error:"Unauthorised" }, { status:401 });
   try {
     const body = await req.json();
-    const id = await createClient((session as any).accessToken, {
-      id:               "",
-      name:             body.name            ?? "",
-      email:            body.email           ?? "",
-      timezone:         body.timezone        ?? "UTC",
-      makeWebhookUrl:   body.makeWebhookUrl  ?? "",
-      platforms:        body.platforms       ?? [],
-      approvalRequired: body.approvalRequired ?? true,
-    });
-    return NextResponse.json<ApiResult>({ ok:true, data:{ id } }, { status:201 });
+    await updateSettings((session as any).accessToken, body);
+    return NextResponse.json<ApiResult>({ ok:true, data:{ saved:true } });
   } catch (err:any) {
     return NextResponse.json<ApiResult>({ ok:false, error:err.message }, { status:500 });
   }

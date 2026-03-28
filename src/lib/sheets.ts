@@ -245,6 +245,67 @@ export async function appendAnalytics(
   });
 }
 
+/** Write settings back to the Settings tab (B column values only). */
+export async function updateSettings(
+  accessToken: string,
+  updates: Record<string, string>
+) {
+  const api = sheets(accessToken);
+  // Read current keys from column A to find row positions
+  const res = await api.spreadsheets.values.get({
+    spreadsheetId: SHEET_ID,
+    range:         "Settings!A1:B20",
+  });
+  const rows = res.data.values ?? [];
+
+  // Build batch update — only update B column for matching keys
+  const data = Object.entries(updates).map(([key, value]) => {
+    const rowIdx = rows.findIndex(r => r[0] === key);
+    if (rowIdx === -1) return null;
+    return {
+      range:  `Settings!B${rowIdx + 1}`,
+      values: [[value]],
+    };
+  }).filter(Boolean);
+
+  if (data.length === 0) return;
+
+  await api.spreadsheets.values.batchUpdate({
+    spreadsheetId: SHEET_ID,
+    requestBody: {
+      valueInputOption: "USER_ENTERED",
+      data: data as any,
+    },
+  });
+}
+
+/** Add a new client row to the Clients tab. */
+export async function createClient(
+  accessToken: string,
+  client: Omit<Client, "createdAt">
+): Promise<string> {
+  const api = sheets(accessToken);
+  const id  = "client_" + Date.now();
+  await api.spreadsheets.values.append({
+    spreadsheetId:    SHEET_ID,
+    range:            "Clients!A:H",
+    valueInputOption: "USER_ENTERED",
+    requestBody: {
+      values: [[
+        id,
+        client.name,
+        client.email,
+        client.timezone,
+        client.makeWebhookUrl ?? "",
+        client.platforms.join(","),
+        client.approvalRequired ? "TRUE" : "FALSE",
+        new Date().toISOString(),
+      ]],
+    },
+  });
+  return id;
+}
+
 /** Append a row to the Log tab. */
 export async function appendLog(
   accessToken: string,
