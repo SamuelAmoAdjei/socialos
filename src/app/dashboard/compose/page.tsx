@@ -84,17 +84,21 @@ export default function ComposePage() {
     if (selectedPlats.size === 0){ toast("Select at least one platform","error"); return; }
     setSubmitting(true);
     try {
+      const platforms = Array.from(selectedPlats);
       const res = await fetch("/api/publish",{
         method:"POST", headers:{"Content-Type":"application/json"},
         body: JSON.stringify({
           content, liOverride, xOverride, igOverride,
-          platforms: Array.from(selectedPlats),
+          platforms,
           mediaUrl, scheduledAt: new Date().toISOString(),
         }),
       }).then(r => r.json());
+
       if (res.ok) {
-        toast("Sent to Make.com — publishing in progress","success");
-        setTimeout(() => router.push("/dashboard/schedule"), 1500);
+        const platNames = platforms.map(p => p.charAt(0).toUpperCase()+p.slice(1)).join(", ");
+        toast(`Sent to ${platNames} via Make.com — publishing in progress`,"success");
+        // Give the sheet a moment to update then redirect
+        setTimeout(() => router.push("/dashboard/schedule"), 2000);
       } else {
         toast(res.error || "Publish failed","error");
       }
