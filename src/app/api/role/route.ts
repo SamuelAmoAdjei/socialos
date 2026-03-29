@@ -1,82 +1,96 @@
 /**
  * GET /api/role
- * Determines the role of the signed-in user.
- * Priority:
- *   1. Vercel env vars VA_EMAIL / CLIENT_EMAIL (fastest, most reliable)
- *   2. Google Sheet Settings tab (allows changing without redeployment)
+ * Returns the role of the signed-in user.
+ * 
+ * PRIORITY ORDER:
+ * 1. Vercel env vars VA_EMAIL / CLIENT_EMAIL  ← most reliable, use this
+ * 2. Google Sheet Settings tab                ← fallback if env vars not set
+ * 3. Never returns 401/redirect — always returns role: "none" if unknown
  *
- * Returns: { role: "va" | "client" | "none", email: string }
+ * DEBUG: visit /api/role while signed in to see exactly what is being checked.
  */
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
-import { getSettings } from "@/lib/sheets";
 
-function normalise(email: string) {
-  return (email ?? "").toLowerCase().trim();
-}
-
-function matchRole(
-  userEmail: string,
-  vaEmail: string,
-  clientEmail: string
-): "va" | "client" | "none" {
-  const u = normalise(userEmail);
-  if (!u) return "none";
-  if (vaEmail     && u === normalise(vaEmail))     return "va";
-  if (clientEmail && u === normalise(clientEmail)) return "client";
-  return "none";
-}
+function norm(s: string) { return (s ?? "").toLowerCase().trim(); }
 
 export async function GET() {
   const session = await getServerSession(authOptions);
   if (!session?.user?.email) {
-    return NextResponse.json({ role:"none", error:"Not signed in" }, { status:401 });
+    return NextResponse.json({ role: "none", reason: "not_signed_in" }, { status: 401 });
   }
 
-  const userEmail = normalise(session.user.email);
+  const userEmail = norm(session.user.email);
+  const debug: Record<string, string> = { userEmail };
 
-  // ── 1. Try env vars first (always available, no Sheet call needed) ──────────
-  const vaEnv     = process.env.VA_EMAIL     ?? "";
-  const clientEnv = process.env.CLIENT_EMAIL ?? "";
+  // ── STEP 1: Env vars (set in Vercel → Settings → Environment Variables) ──
+  const vaEnv     = norm(process.env.VA_EMAIL     ?? "");
+  const clientEnv = norm(process.env.CLIENT_EMAIL ?? "");
 
-  if (vaEnv || clientEnv) {
-    const role = matchRole(userEmail, vaEnv, clientEnv);
-    if (role !== "none") {
-      return NextResponse.json({ role, email:userEmail, source:"env" });
-    }
+  debug.VA_EMAIL_ENV     = vaEnv     || "(NOT SET IN VERCEL)";
+  debug.CLIENT_EMAIL_ENV = clientEnv || "(NOT SET IN VERCEL)";
+
+  if (vaEnv && userEmail === vaEnv) {
+    return NextResponse.json({ role: "va", source: "env", userEmail, debug });
+  }
+  if (clientEnv && userEmail === clientEnv) {
+    return NextResponse.json({ role: "client", source: "env", userEmail, debug });
   }
 
-  // ── 2. Try Google Sheet Settings tab ────────────────────────────────────────
+  // ── STEP 2: Sheet Settings tab ───────────────────────────────────────────
   try {
-    const token    = (session as any).accessToken as string;
-    const settings = await getSettings(token);
+    const token = (session as any).accessToken as string;
+    if (!token) throw new Error("No access token");
 
-    const vaSheet     = settings["VA_EMAIL"]     ?? "";
-    const clientSheet = settings["CLIENT_EMAIL"] ?? "";
+    // Read Settings tab directly without going through the sheets lib
+    // to avoid any tab-resolver caching issues
+    const { google } = await import("googleapis");
+    const auth = new google.auth.OAuth2();
+    auth.setCredentials({ access_token: token });
+    const api = google.sheets({ version: "v4", auth });
 
-    const role = matchRole(userEmail, vaSheet, clientSheet);
-    return NextResponse.json({
-      role,
-      email: userEmail,
-      source: "sheet",
-      // Debug info to help troubleshoot
-      debug: {
-        userEmail,
-        vaEmailInSheet:     vaSheet     || "(empty)",
-        clientEmailInSheet: clientSheet || "(empty)",
-        vaEmailInEnv:       vaEnv       || "(not set)",
-        clientEmailInEnv:   clientEnv   || "(not set)",
-      }
+    const sheetId = process.env.GOOGLE_SHEETS_ID!;
+    const res = await api.spreadsheets.values.get({
+      spreadsheetId: sheetId,
+      range: "Settings!A1:B20",
     });
-  } catch (err: any) {
-    // Sheet unreachable — if we already checked env vars and got "none", return none
+
+    const rows = res.data.values ?? [];
+    const settings: Record<string,string> = {};
+    rows.forEach(([k, v]) => { if (k) settings[norm(String(k))] = norm(String(v ?? "")); });
+
+    // Try both lowercase and uppercase versions of the key
+    const vaSheet     = settings["va_email"]     || settings["VA_EMAIL"]     || "";
+    const clientSheet = settings["client_email"] || settings["CLIENT_EMAIL"] || "";
+
+    debug.VA_EMAIL_SHEET     = vaSheet     || "(empty in Settings tab)";
+    debug.CLIENT_EMAIL_SHEET = clientSheet || "(empty in Settings tab)";
+    debug.ALL_SETTINGS_KEYS  = Object.keys(settings).join(", ");
+
+    if (vaSheet && userEmail === vaSheet) {
+      return NextResponse.json({ role: "va", source: "sheet", userEmail, debug });
+    }
+    if (clientSheet && userEmail === clientSheet) {
+      return NextResponse.json({ role: "client", source: "sheet", userEmail, debug });
+    }
+
     return NextResponse.json({
       role: "none",
-      email: userEmail,
-      source: "fallback",
-      error: err.message,
-      hint: "Set VA_EMAIL and CLIENT_EMAIL in Vercel environment variables as a reliable fallback.",
+      source: "sheet",
+      userEmail,
+      debug,
+      FIX: "Add VA_EMAIL and CLIENT_EMAIL to Vercel environment variables, or fill them in your Settings sheet B3 and B4",
+    });
+
+  } catch (err: any) {
+    debug.SHEET_ERROR = err.message;
+    return NextResponse.json({
+      role: "none",
+      source: "error",
+      userEmail,
+      debug,
+      FIX: "CRITICAL: Set VA_EMAIL=" + userEmail + " in Vercel Environment Variables to fix this immediately",
     });
   }
 }
