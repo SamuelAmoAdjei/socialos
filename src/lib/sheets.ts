@@ -1,18 +1,12 @@
 /**
- * lib/sheets.ts  — server-side only.
- *
- * Key improvements in this version:
- * 1. Tab name resolver — handles capitalisation mismatches between code and actual sheet tabs
- * 2. Uses drive.readonly scope (not drive.file) so it can access user-created sheets
- * 3. All range strings go through resolveTab() before being sent to the API
+ * lib/sheets.ts — server-side only.
+ * Fixed: tab resolver now gracefully falls back, no silent failures on createPost.
  */
-
 import { google } from "googleapis";
 import type { Post, Client, AnalyticsRow, PostStatus, Platform } from "@/types";
 
 const SHEET_ID = process.env.GOOGLE_SHEETS_ID!;
 
-// ── Auth ─────────────────────────────────────────────────────────────────────
 function getAuth(accessToken: string) {
   const auth = new google.auth.OAuth2();
   auth.setCredentials({ access_token: accessToken });
@@ -23,38 +17,24 @@ function shts(accessToken: string) {
 }
 
 // ── Tab name resolver ─────────────────────────────────────────────────────────
-// Fetches the real tab names from the sheet once per process restart.
-// This means if your tabs are named "posts" or "POSTS" instead of "Posts"
-// the code still works — it finds the closest match case-insensitively.
-const tabCacheByToken: Record<string, Record<string,string>> = {};
-
+// Tries to find the real tab name case-insensitively.
+// Falls back to the desired name if anything fails — never throws.
 async function resolveTab(accessToken: string, desired: string): Promise<string> {
-  // Use a short key so we don't store huge tokens as keys
-  const cacheKey = accessToken.slice(-16);
-
-  if (!tabCacheByToken[cacheKey]) {
-    try {
-      const api = shts(accessToken);
-      const meta = await api.spreadsheets.get({ spreadsheetId: SHEET_ID });
-      const cache: Record<string,string> = {};
-      for (const sheet of meta.data.sheets ?? []) {
-        const title = sheet.properties?.title ?? "";
-        cache[title]             = title;   // exact
-        cache[title.toLowerCase()]= title;  // lowercase key → real title
-      }
-      tabCacheByToken[cacheKey] = cache;
-    } catch {
-      return desired;  // if metadata fails, fall back to the desired name
+  try {
+    const api  = shts(accessToken);
+    const meta = await api.spreadsheets.get({ spreadsheetId: SHEET_ID });
+    for (const sheet of meta.data.sheets ?? []) {
+      const title = sheet.properties?.title ?? "";
+      if (title.toLowerCase() === desired.toLowerCase()) return title;
+      if (title === desired) return title;
     }
+  } catch {
+    // If metadata fetch fails, use the desired name as-is
   }
-
-  const cache = tabCacheByToken[cacheKey];
-  // Try exact first, then lowercase match
-  return cache[desired] ?? cache[desired.toLowerCase()] ?? desired;
+  return desired;
 }
 
-/** Build a full range string like "Posts!A2:O" using the resolved tab name */
-async function r(accessToken: string, tab: string, cells: string): Promise<string> {
+async function range(accessToken: string, tab: string, cells: string): Promise<string> {
   const resolved = await resolveTab(accessToken, tab);
   return `${resolved}!${cells}`;
 }
@@ -73,7 +53,7 @@ function rowToPost(row: string[], rowIndex: number): Post & { rowIndex: number }
     mediaUrl:        row[7]  ?? "",
     scheduledAt:     row[8]  ?? "",
     status:          (row[9]  ?? "draft") as PostStatus,
-    platformPostIds: row[10] ? (() => { try { return JSON.parse(row[10]); } catch { return {}; } })() : {},
+    platformPostIds: (() => { try { return JSON.parse(row[10] || "{}"); } catch { return {}; } })(),
     publishedAt:     row[11] ?? "",
     errorMsg:        row[12] ?? "",
     docLink:         row[13] ?? "",
@@ -98,12 +78,9 @@ function rowToClient(row: string[]): Client {
 
 export async function getPosts(accessToken: string): Promise<(Post & { rowIndex: number })[]> {
   const api = shts(accessToken);
-  const res = await api.spreadsheets.values.get({
-    spreadsheetId: SHEET_ID,
-    range:         await r(accessToken, "Posts", "A2:O"),
-  });
-  const rows = res.data.values ?? [];
-  return rows.map((row, i) => rowToPost(row.map(String), i + 2));
+  const rng = await range(accessToken, "Posts", "A2:O");
+  const res = await api.spreadsheets.values.get({ spreadsheetId: SHEET_ID, range: rng });
+  return (res.data.values ?? []).map((row, i) => rowToPost(row.map(String), i + 2));
 }
 
 export async function getPostById(
@@ -118,21 +95,37 @@ export async function createPost(
   accessToken: string,
   data: Omit<Post, "id" | "createdAt" | "publishedAt" | "platformPostIds" | "errorMsg">
 ): Promise<string> {
+  if (!accessToken) throw new Error("No access token — please sign out and sign back in");
+  if (!SHEET_ID)    throw new Error("GOOGLE_SHEETS_ID environment variable is not set");
+
   const api = shts(accessToken);
   const id  = `post_${Date.now()}`;
   const now = new Date().toISOString();
+  const rng = await range(accessToken, "Posts", "A:O");
 
   await api.spreadsheets.values.append({
     spreadsheetId:    SHEET_ID,
-    range:            await r(accessToken, "Posts", "A:O"),
-    valueInputOption: "USER_ENTERED",
-    requestBody: { values: [[
-      id, data.clientId, data.content,
-      data.liOverride ?? "", data.xOverride ?? "", data.igOverride ?? "",
-      data.platforms.join(","), data.mediaUrl ?? "",
-      data.scheduledAt ?? "", data.status,
-      "{}", "", "", data.docLink ?? "", now,
-    ]]},
+    range:            rng,
+    valueInputOption: "RAW",
+    requestBody: {
+      values: [[
+        id,
+        data.clientId || "default",
+        data.content  || "",
+        data.liOverride  ?? "",
+        data.xOverride   ?? "",
+        data.igOverride  ?? "",
+        (data.platforms ?? []).join(","),
+        data.mediaUrl    ?? "",
+        data.scheduledAt ?? "",
+        data.status      || "draft",
+        "{}",
+        "",
+        "",
+        data.docLink ?? "",
+        now,
+      ]],
+    },
   });
   return id;
 }
@@ -142,16 +135,20 @@ export async function updatePostRow(
   rowIndex: number,
   updates: Partial<{
     status:          PostStatus;
+    content:         string;
     scheduledAt:     string;
     platformPostIds: Record<string, string>;
     publishedAt:     string;
     errorMsg:        string;
+    note:            string;
   }>
 ) {
-  const api = shts(accessToken);
+  const api     = shts(accessToken);
   const tabName = await resolveTab(accessToken, "Posts");
   const colMap: Record<string,string> = {
     status:"J", platformPostIds:"K", publishedAt:"L", errorMsg:"M", scheduledAt:"I",
+    content:"C",  // column C = content
+    note:"N",     // column N = docLink/notes field
   };
   await Promise.all(
     Object.entries(updates).map(([key, val]) => {
@@ -161,7 +158,7 @@ export async function updatePostRow(
       return api.spreadsheets.values.update({
         spreadsheetId:    SHEET_ID,
         range:            `${tabName}!${col}${rowIndex}`,
-        valueInputOption: "USER_ENTERED",
+        valueInputOption: "RAW",  // RAW preserves line breaks and special chars
         requestBody:      { values: [[value]] },
       });
     })
@@ -172,12 +169,9 @@ export async function updatePostRow(
 
 export async function getClients(accessToken: string): Promise<Client[]> {
   const api = shts(accessToken);
-  const res = await api.spreadsheets.values.get({
-    spreadsheetId: SHEET_ID,
-    range:         await r(accessToken, "Clients", "A2:H"),
-  });
-  const rows = res.data.values ?? [];
-  return rows.map(row => rowToClient(row.map(String)));
+  const rng = await range(accessToken, "Clients", "A2:H");
+  const res = await api.spreadsheets.values.get({ spreadsheetId: SHEET_ID, range: rng });
+  return (res.data.values ?? []).map(row => rowToClient(row.map(String)));
 }
 
 export async function getClientById(
@@ -194,16 +188,19 @@ export async function createClient(
 ): Promise<string> {
   const api = shts(accessToken);
   const id  = "client_" + Date.now();
+  const rng = await range(accessToken, "Clients", "A:H");
   await api.spreadsheets.values.append({
     spreadsheetId:    SHEET_ID,
-    range:            await r(accessToken, "Clients", "A:H"),
+    range:            rng,
     valueInputOption: "USER_ENTERED",
-    requestBody: { values: [[
-      id, client.name, client.email, client.timezone,
-      client.makeWebhookUrl ?? "", client.platforms.join(","),
-      client.approvalRequired ? "TRUE" : "FALSE",
-      new Date().toISOString(),
-    ]]},
+    requestBody: {
+      values: [[
+        id, client.name, client.email, client.timezone,
+        client.makeWebhookUrl ?? "", client.platforms.join(","),
+        client.approvalRequired ? "TRUE" : "FALSE",
+        new Date().toISOString(),
+      ]],
+    },
   });
   return id;
 }
@@ -212,13 +209,16 @@ export async function createClient(
 
 export async function getSettings(accessToken: string): Promise<Record<string,string>> {
   const api = shts(accessToken);
-  const res = await api.spreadsheets.values.get({
-    spreadsheetId: SHEET_ID,
-    range:         await r(accessToken, "Settings", "A1:B20"),
-  });
+  const rng = await range(accessToken, "Settings", "A1:B20");
+  const res = await api.spreadsheets.values.get({ spreadsheetId: SHEET_ID, range: rng });
   const settings: Record<string,string> = {};
-  for (const [key, value] of (res.data.values ?? [])) {
-    if (key) settings[String(key)] = String(value ?? "");
+  for (const row of (res.data.values ?? [])) {
+    const k = String(row[0] ?? "").trim();
+    const v = String(row[1] ?? "").trim();
+    if (k) {
+      settings[k]             = v;  // exact key
+      settings[k.toUpperCase()] = v; // uppercase key too
+    }
   }
   return settings;
 }
@@ -227,23 +227,21 @@ export async function updateSettings(
   accessToken: string,
   updates: Record<string,string>
 ) {
-  const api = shts(accessToken);
+  const api     = shts(accessToken);
   const tabName = await resolveTab(accessToken, "Settings");
-
-  const res = await api.spreadsheets.values.get({
+  const res     = await api.spreadsheets.values.get({
     spreadsheetId: SHEET_ID,
     range:         `${tabName}!A1:B20`,
   });
   const rows = res.data.values ?? [];
 
   const data = Object.entries(updates).map(([key, value]) => {
-    const idx = rows.findIndex(r => String(r[0]) === key);
+    const idx = rows.findIndex(r => String(r[0]).trim() === key);
     if (idx === -1) return null;
     return { range:`${tabName}!B${idx + 1}`, values:[[value]] };
   }).filter((x): x is NonNullable<typeof x> => x !== null);
 
   if (data.length === 0) return;
-
   await api.spreadsheets.values.batchUpdate({
     spreadsheetId: SHEET_ID,
     requestBody:   { valueInputOption:"USER_ENTERED", data },
@@ -257,10 +255,8 @@ export async function getAnalytics(
   options?: { platform?: string; limit?: number }
 ): Promise<AnalyticsRow[]> {
   const api = shts(accessToken);
-  const res = await api.spreadsheets.values.get({
-    spreadsheetId: SHEET_ID,
-    range:         await r(accessToken, "Analytics", "A2:L"),
-  });
+  const rng = await range(accessToken, "Analytics", "A2:L");
+  const res = await api.spreadsheets.values.get({ spreadsheetId: SHEET_ID, range: rng });
   let rows = (res.data.values ?? []).map(row => ({
     date:           row[0] ?? "",
     platform:       (row[1] ?? "linkedin") as Platform,
@@ -285,6 +281,7 @@ export async function appendAnalytics(
   rows: Omit<AnalyticsRow, "engagementRate">[]
 ) {
   const api = shts(accessToken);
+  const rng = await range(accessToken, "Analytics", "A:L");
   const values = rows.map(rw => {
     const eng = rw.impressions > 0
       ? (((rw.likes + rw.comments + rw.shares) / rw.impressions) * 100).toFixed(2)
@@ -295,7 +292,7 @@ export async function appendAnalytics(
   });
   await api.spreadsheets.values.append({
     spreadsheetId:    SHEET_ID,
-    range:            await r(accessToken, "Analytics", "A:L"),
+    range:            rng,
     valueInputOption: "USER_ENTERED",
     requestBody:      { values },
   });
@@ -311,9 +308,10 @@ export async function appendLog(
   details = ""
 ) {
   const api = shts(accessToken);
+  const rng = await range(accessToken, "Log", "A:E");
   await api.spreadsheets.values.append({
     spreadsheetId:    SHEET_ID,
-    range:            await r(accessToken, "Log", "A:E"),
+    range:            rng,
     valueInputOption: "USER_ENTERED",
     requestBody:      { values: [[new Date().toISOString(), fn, postId, action, details]] },
   });

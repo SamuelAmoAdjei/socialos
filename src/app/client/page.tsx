@@ -1,63 +1,110 @@
 "use client";
 
+/**
+ * CLIENT PORTAL — /client
+ * Completely standalone. Does NOT depend on the VA dashboard theme.
+ * Has its own theme stored under "sos-client-theme" in localStorage.
+ * All styles are defined locally — no reliance on globals.css variables
+ * that could be overridden by the VA dashboard.
+ */
+
 import { useSession, signIn, signOut } from "next-auth/react";
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import type { Post, Platform } from "@/types";
+
+// ── Design tokens — hardcoded for client portal independence ──────────────────
+const T = {
+  dark: {
+    bg:      "#0B0F1A",
+    surface: "#141B2D",
+    card:    "#1A2235",
+    input:   "#0F1623",
+    border:  "rgba(255,255,255,0.08)",
+    text1:   "#F1F5F9",
+    text2:   "#94A3B8",
+    text3:   "#475569",
+  },
+  light: {
+    bg:      "#F1F5F9",
+    surface: "#FFFFFF",
+    card:    "#FFFFFF",
+    input:   "#F1F5F9",
+    border:  "rgba(0,0,0,0.08)",
+    text1:   "#0F172A",
+    text2:   "#475569",
+    text3:   "#94A3B8",
+  },
+};
+const ACCENT   = "#00C2A8";
+const SUCCESS  = "#22C55E";
+const GOLD     = "#F59E0B";
+const DANGER   = "#EF4444";
+const BLUE     = "#4F8EF7";
+
+const PLAT_META: Record<string,{label:string;color:string;bg:string}> = {
+  linkedin: {label:"LinkedIn", color:"#0077B5",bg:"rgba(0,119,181,0.12)"},
+  instagram:{label:"Instagram",color:"#E1306C",bg:"rgba(225,48,108,0.12)"},
+  facebook: {label:"Facebook", color:"#1877F2",bg:"rgba(24,119,242,0.12)"},
+  x:        {label:"X",        color:"#888888",bg:"rgba(255,255,255,0.08)"},
+  tiktok:   {label:"TikTok",   color:"#69C9D0",bg:"rgba(105,201,208,0.12)"},
+};
+
+const ALL_PLATFORMS: Platform[] = ["linkedin","instagram","facebook","x","tiktok"];
 
 type Tab = "pending"|"approved"|"published"|"topics";
 
-const ALL_PLATFORMS: Platform[] = ["linkedin","instagram","facebook","x","tiktok"];
-const PLAT_META: Record<Platform,{label:string;color:string;bg:string}> = {
-  linkedin:  {label:"LinkedIn",  color:"#0077B5",bg:"rgba(0,119,181,0.12)"},
-  instagram: {label:"Instagram", color:"#E1306C",bg:"rgba(225,48,108,0.12)"},
-  facebook:  {label:"Facebook",  color:"#1877F2",bg:"rgba(24,119,242,0.12)"},
-  x:         {label:"X",         color:"#888888",bg:"rgba(255,255,255,0.08)"},
-  tiktok:    {label:"TikTok",    color:"#69C9D0",bg:"rgba(105,201,208,0.12)"},
-};
-
-const PILL_CLS: Record<string,string> = {
-  published:"pill-published",scheduled:"pill-scheduled",
-  approved:"pill-approved",pending:"pill-pending",
-  draft:"pill-draft",failed:"pill-failed",publishing:"pill-publishing",
-};
-
 export default function ClientPortal() {
   const { data:session, status } = useSession();
+
+  // Independent theme — does NOT share with VA dashboard
+  const [theme, setTheme] = useState<"dark"|"light">("dark");
+  useEffect(() => {
+    const saved = localStorage.getItem("sos-client-theme") as "dark"|"light"|null;
+    setTheme(saved ?? "dark");
+  }, []);
+  function toggleTheme() {
+    const next = theme === "dark" ? "light" : "dark";
+    setTheme(next);
+    localStorage.setItem("sos-client-theme", next);
+  }
+
+  const C = T[theme];
+
   const [role,        setRole]        = useState<"loading"|"client"|"va"|"none">("loading");
   const [tab,         setTab]         = useState<Tab>("pending");
   const [posts,       setPosts]       = useState<(Post & {rowIndex:number})[]>([]);
   const [postsLoading,setPostsLoading]= useState(true);
-  const [toast,       setToast]       = useState<{msg:string;type:"success"|"error"}|null>(null);
+  const [toast,       setToast]       = useState<{msg:string;type:"success"|"error"|"info"}|null>(null);
   const [acting,      setActing]      = useState<string|null>(null);
 
-  // Edit state
+  // Edit modal
   const [editPost,    setEditPost]    = useState<(Post & {rowIndex:number})|null>(null);
   const [editContent, setEditContent] = useState("");
   const [editSaving,  setEditSaving]  = useState(false);
 
-  // Topic submission state
+  // Topic form
   const [topicText,   setTopicText]   = useState("");
   const [topicPlats,  setTopicPlats]  = useState<Set<Platform>>(new Set<Platform>(["linkedin","instagram"]));
   const [topicMedia,  setTopicMedia]  = useState("");
   const [topicSaving, setTopicSaving] = useState(false);
-  const [topicMsg,    setTopicMsg]    = useState("");
+  const [topicMsg,    setTopicMsg]    = useState<{text:string;ok:boolean}|null>(null);
 
-  function showToast(msg:string, type:"success"|"error") {
+  function showToast(msg:string, type:"success"|"error"|"info"="info") {
     setToast({msg,type});
-    setTimeout(()=>setToast(null),3500);
+    setTimeout(()=>setToast(null),4000);
   }
 
-  // ── Check role ──────────────────────────────────────────────────────────────
+  // Role check
   useEffect(() => {
-    if (status === "unauthenticated") { setRole("none"); return; }
-    if (status === "authenticated") {
+    if (status==="unauthenticated") { setRole("none"); return; }
+    if (status==="authenticated") {
       fetch("/api/role").then(r=>r.json()).then(res=>{
         setRole(res.role ?? "none");
       }).catch(()=>setRole("none"));
     }
   }, [status]);
 
-  // ── Load posts ──────────────────────────────────────────────────────────────
+  // Load posts
   const loadPosts = useCallback(() => {
     if (role !== "client") return;
     fetch("/api/posts").then(r=>r.json())
@@ -67,11 +114,11 @@ export default function ClientPortal() {
 
   useEffect(() => {
     loadPosts();
-    const id = setInterval(loadPosts, 20_000);
+    const id = setInterval(loadPosts, 30_000);
     return () => clearInterval(id);
   }, [loadPosts]);
 
-  // ── Actions ─────────────────────────────────────────────────────────────────
+  // Approve
   async function approve(post: Post & {rowIndex:number}) {
     setActing(post.id);
     try {
@@ -81,13 +128,15 @@ export default function ClientPortal() {
       }).then(r=>r.json());
       if (res.ok) {
         setPosts(p=>p.map(x=>x.id===post.id?{...x,status:"approved"}:x));
-        showToast("Post approved — will publish at the scheduled time","success");
+        showToast("✓ Post approved — will publish at the scheduled time","success");
       } else { showToast(res.error||"Failed","error"); }
     } finally { setActing(null); }
   }
 
+  // Request changes
   async function requestChanges(post: Post & {rowIndex:number}) {
     const note = window.prompt("What changes would you like? (optional note to your VA)");
+    if (note === null) return; // user cancelled
     setActing(post.id);
     try {
       const res = await fetch("/api/posts/approve",{
@@ -96,49 +145,45 @@ export default function ClientPortal() {
       }).then(r=>r.json());
       if (res.ok) {
         setPosts(p=>p.map(x=>x.id===post.id?{...x,status:"draft"}:x));
-        showToast("Sent back for edits — your VA will revise and resubmit","success");
+        showToast("Feedback sent — your VA will revise and resubmit","info");
       } else { showToast(res.error||"Failed","error"); }
     } finally { setActing(null); }
   }
 
+  // Save edit
   async function saveEdit() {
     if (!editPost) return;
+    if (!editContent.trim()) { showToast("Content cannot be empty","error"); return; }
     setEditSaving(true);
     try {
-      // Update via approve endpoint with new content note
       const res = await fetch("/api/posts/approve",{
         method:"POST", headers:{"Content-Type":"application/json"},
         body: JSON.stringify({
           postId:editPost.id, rowIndex:editPost.rowIndex,
-          status:"pending", note:`Client edited content: ${editContent}`,
+          status:"pending",
+          note:`Client edited content to: "${editContent.substring(0,100)}…"`,
         }),
       }).then(r=>r.json());
-      // Also update content in sheet via PATCH-style approach
-      await fetch("/api/posts",{
-        method:"POST", headers:{"Content-Type":"application/json"},
-        body: JSON.stringify({
-          ...editPost, content:editContent, status:"pending"
-        }),
-      });
       if (res.ok) {
         setPosts(p=>p.map(x=>x.id===editPost.id?{...x,content:editContent}:x));
         setEditPost(null);
-        showToast("Post updated — now pending re-approval","success");
+        showToast("✓ Post updated — still pending your final approval","success");
       } else { showToast(res.error||"Failed to save","error"); }
     } finally { setEditSaving(false); }
   }
 
+  // Submit topic
   async function submitTopic() {
-    if (!topicText.trim()) { setTopicMsg("Please describe the topic"); return; }
-    if (topicPlats.size===0){ setTopicMsg("Select at least one platform"); return; }
-    setTopicSaving(true); setTopicMsg("");
+    if (!topicText.trim()) { setTopicMsg({text:"Please describe the topic",ok:false}); return; }
+    if (topicPlats.size===0){ setTopicMsg({text:"Select at least one platform",ok:false}); return; }
+    setTopicSaving(true); setTopicMsg(null);
     try {
       const res = await fetch("/api/posts",{
         method:"POST", headers:{"Content-Type":"application/json"},
         body: JSON.stringify({
           content:     `[TOPIC IDEA] ${topicText}`,
           platforms:   Array.from(topicPlats),
-          mediaUrl:    topicMedia,
+          mediaUrl:    topicMedia.trim()||undefined,
           status:      "draft",
           clientId:    session?.user?.email ?? "client",
           scheduledAt: "",
@@ -146,78 +191,93 @@ export default function ClientPortal() {
       }).then(r=>r.json());
       if (res.ok) {
         setTopicText(""); setTopicMedia("");
-        setTopicMsg("Topic submitted to your VA");
-        showToast("Topic idea sent to your VA","success");
-      } else { setTopicMsg(res.error||"Failed to submit"); }
+        setTopicMsg({text:"✓ Topic submitted to your VA — they will create the post",ok:true});
+        showToast("Topic sent to your VA","success");
+      } else { setTopicMsg({text:res.error||"Submit failed",ok:false}); }
     } finally { setTopicSaving(false); }
   }
 
-  // ── Filtered posts ──────────────────────────────────────────────────────────
-  const filtered = {
+  // Filtered posts per tab
+  const byTab = {
     pending:   posts.filter(p=>p.status==="pending"),
     approved:  posts.filter(p=>p.status==="approved"),
     published: posts.filter(p=>p.status==="published"||p.status==="partial"),
-    topics:    [],
-  }[tab] ?? [];
+    topics:    [] as typeof posts,
+  };
+  const pendingCount = byTab.pending.length;
 
-  const pendingCount = posts.filter(p=>p.status==="pending").length;
+  // ── Styles ───────────────────────────────────────────────────────────────
+  const page: React.CSSProperties = {
+    minHeight:"100vh", background:C.bg, color:C.text1,
+    fontFamily:"'DM Sans',system-ui,sans-serif",
+    transition:"background 0.2s, color 0.2s",
+  };
+  const card: React.CSSProperties = {
+    background:C.card, border:`1px solid ${C.border}`,
+    borderRadius:16, padding:20,
+    transition:"background 0.2s",
+  };
+  const inp: React.CSSProperties = {
+    width:"100%", padding:"10px 14px",
+    background:C.input, border:`1px solid ${C.border}`,
+    borderRadius:8, color:C.text1,
+    fontFamily:"inherit", fontSize:"0.875rem",
+    outline:"none", transition:"border-color 0.15s",
+  };
+  const lbl: React.CSSProperties = {
+    fontSize:"0.78rem", fontWeight:600, color:C.text2,
+    marginBottom:6, display:"block",
+  };
 
-  // ── Signed out ──────────────────────────────────────────────────────────────
-  if (status === "loading" || role === "loading") {
+  // ── Not signed in ─────────────────────────────────────────────────────────
+  if (status==="loading"||role==="loading") {
     return (
-      <div style={{minHeight:"100vh",background:"#0B0F1A",display:"flex",alignItems:"center",justifyContent:"center"}}>
-        <div className="spinner spinner-lg"/>
+      <div style={{...page,display:"flex",alignItems:"center",justifyContent:"center"}}>
+        <div style={{width:36,height:36,borderRadius:"50%",border:`3px solid ${C.border}`,borderTopColor:ACCENT,animation:"spin 0.7s linear infinite"}}/>
       </div>
     );
   }
 
-  if (status === "unauthenticated" || role === "none") {
+  if (status==="unauthenticated"||role==="none") {
     return (
-      <div style={{minHeight:"100vh",background:"#0B0F1A",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:24}}>
-        <div style={{width:52,height:52,borderRadius:14,background:"linear-gradient(135deg,#00C2A8,#00A896)",display:"flex",alignItems:"center",justifyContent:"center",boxShadow:"0 6px 24px rgba(0,194,168,0.35)",marginBottom:20}}>
-          <svg width="24" height="24" viewBox="0 0 20 20" fill="none" stroke="white" strokeWidth="2.2" strokeLinecap="round">
+      <div style={{...page,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:24}}>
+        <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
+        <div style={{width:56,height:56,borderRadius:16,background:`linear-gradient(135deg,${ACCENT},#00A896)`,display:"flex",alignItems:"center",justifyContent:"center",boxShadow:`0 6px 24px rgba(0,194,168,0.35)`,marginBottom:20}}>
+          <svg width="26" height="26" viewBox="0 0 20 20" fill="none" stroke="white" strokeWidth="2.2" strokeLinecap="round">
             <path d="M10 2L18 6v8l-8 4-8-4V6z"/><path d="M10 2v12M2 6l8 4 8-4"/>
           </svg>
         </div>
-        <h1 style={{fontFamily:"'Sora',sans-serif",fontWeight:700,fontSize:"1.6rem",color:"#F1F5F9",marginBottom:8,letterSpacing:"-0.02em"}}>
-          Social<em style={{color:"#00C2A8",fontStyle:"normal"}}>OS</em> — Client Portal
+        <h1 style={{fontFamily:"'Sora',system-ui,sans-serif",fontWeight:700,fontSize:"1.6rem",color:C.text1,marginBottom:8,letterSpacing:"-0.02em",textAlign:"center"}}>
+          Social<em style={{color:ACCENT,fontStyle:"normal"}}>OS</em> — Client Portal
         </h1>
-        <p style={{fontSize:"0.9rem",color:"#94A3B8",marginBottom:32,textAlign:"center",maxWidth:380,lineHeight:1.6}}>
-          Sign in with the Google account registered by your VA to access your social media dashboard.
+        <p style={{fontSize:"0.9rem",color:C.text2,marginBottom:32,textAlign:"center",maxWidth:380,lineHeight:1.7}}>
+          Sign in with the Google account your VA registered to access your social media dashboard.
         </p>
-        {role === "none" && status === "authenticated" && (
-          <div style={{padding:"12px 20px",background:"rgba(239,68,68,0.12)",border:"1px solid rgba(239,68,68,0.25)",borderRadius:10,fontSize:"0.85rem",color:"#EF4444",marginBottom:20,textAlign:"center",maxWidth:380}}>
+        {role==="none"&&status==="authenticated"&&(
+          <div style={{padding:"12px 20px",background:"rgba(239,68,68,0.12)",border:"1px solid rgba(239,68,68,0.25)",borderRadius:10,fontSize:"0.85rem",color:DANGER,marginBottom:20,textAlign:"center",maxWidth:420}}>
             Your email is not registered in this system. Contact your VA to be added.
           </div>
         )}
         <button
-          onClick={()=>signIn("google", {callbackUrl:"/client"})}
-          style={{
-            display:"flex",alignItems:"center",gap:12,padding:"14px 28px",
-            background:"#FFFFFF",border:"1px solid #E2E8F0",
-            borderRadius:12,fontSize:"0.95rem",fontWeight:500,
-            fontFamily:"'DM Sans',sans-serif",cursor:"pointer",
-            boxShadow:"0 2px 12px rgba(0,0,0,0.15)",color:"#0F172A",
-          }}>
-          <GoogleIcon/>
-          Continue with Google
+          onClick={()=>signIn("google",{callbackUrl:"/client"})}
+          style={{display:"flex",alignItems:"center",gap:12,padding:"14px 32px",background:"white",border:"1px solid #E2E8F0",borderRadius:12,fontSize:"0.95rem",fontWeight:500,cursor:"pointer",boxShadow:"0 2px 16px rgba(0,0,0,0.12)",color:"#0F172A"}}>
+          <GoogleIcon/> Continue with Google
         </button>
       </div>
     );
   }
 
-  // ── VA trying to access client portal ──────────────────────────────────────
-  if (role === "va") {
+  // VA trying to use client portal
+  if (role==="va") {
     return (
-      <div style={{minHeight:"100vh",background:"#0B0F1A",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:24}}>
-        <div style={{padding:"24px 32px",background:"#1A2235",border:"1px solid rgba(255,255,255,0.1)",borderRadius:16,textAlign:"center",maxWidth:400}}>
-          <div style={{fontSize:"2rem",marginBottom:12}}>🔐</div>
-          <h2 style={{fontFamily:"'Sora',sans-serif",color:"#F1F5F9",marginBottom:8}}>VA Account Detected</h2>
-          <p style={{fontSize:"0.85rem",color:"#94A3B8",lineHeight:1.6,marginBottom:20}}>
-            You are signed in as the VA. The client portal is for clients only.
-            Go to your VA dashboard instead.
+      <div style={{...page,display:"flex",alignItems:"center",justifyContent:"center",padding:24}}>
+        <div style={{...card,textAlign:"center",maxWidth:400,padding:32}}>
+          <div style={{fontSize:"2.5rem",marginBottom:12}}>🔐</div>
+          <h2 style={{fontFamily:"'Sora',system-ui",marginBottom:8,color:C.text1}}>VA Account Detected</h2>
+          <p style={{fontSize:"0.85rem",color:C.text2,lineHeight:1.7,marginBottom:20}}>
+            You are signed in as the VA. This portal is for clients only. Go to your VA dashboard.
           </p>
-          <a href="/dashboard" style={{display:"inline-block",padding:"10px 24px",background:"#00C2A8",color:"#0B0F1A",borderRadius:8,fontWeight:600,fontSize:"0.9rem",textDecoration:"none"}}>
+          <a href="/dashboard" style={{display:"inline-block",padding:"10px 24px",background:ACCENT,color:"#0B0F1A",borderRadius:8,fontWeight:600,fontSize:"0.9rem",textDecoration:"none"}}>
             Go to VA Dashboard
           </a>
         </div>
@@ -225,53 +285,62 @@ export default function ClientPortal() {
     );
   }
 
-  // ── Client portal ────────────────────────────────────────────────────────────
+  // ── Client portal ──────────────────────────────────────────────────────────
   return (
-    <div style={{minHeight:"100vh",background:"var(--bg-app)"}}>
+    <div style={page}>
+      <style>{`
+        @keyframes spin{to{transform:rotate(360deg)}}
+        @keyframes toastIn{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}
+        @keyframes fadeIn{from{opacity:0}to{opacity:1}}
+        * { box-sizing: border-box; }
+        .cl-btn { cursor:pointer; font-family:inherit; border:none; transition:all 0.15s; }
+        .cl-btn:disabled { opacity:0.5; cursor:not-allowed; }
+        .cl-input:focus { border-color:${ACCENT}!important; box-shadow:0 0 0 3px rgba(0,194,168,0.12); }
+        textarea.cl-input { resize:vertical; min-height:100px; }
+      `}</style>
 
       {/* Toast */}
       {toast && (
         <div style={{
           position:"fixed",top:20,left:"50%",transform:"translateX(-50%)",
-          zIndex:600,background:"var(--bg-card)",
-          border:`1px solid ${toast.type==="success"?"rgba(34,197,94,0.3)":"rgba(239,68,68,0.3)"}`,
-          borderRadius:"var(--radius-md)",padding:"12px 24px",
-          boxShadow:"var(--shadow-md)",fontSize:"0.87rem",fontWeight:500,
-          color:toast.type==="success"?"var(--success)":"var(--danger)",
-          animation:"toastIn 0.3s var(--ease)",whiteSpace:"nowrap",
+          zIndex:600,background:C.card,
+          border:`1px solid ${toast.type==="success"?"rgba(34,197,94,0.3)":toast.type==="error"?"rgba(239,68,68,0.3)":"rgba(79,142,247,0.3)"}`,
+          borderRadius:12,padding:"12px 24px",boxShadow:"0 8px 28px rgba(0,0,0,0.16)",
+          fontSize:"0.87rem",fontWeight:500,
+          color:toast.type==="success"?SUCCESS:toast.type==="error"?DANGER:BLUE,
+          animation:"toastIn 0.3s ease",whiteSpace:"nowrap",
         }}>{toast.msg}</div>
       )}
 
       {/* Edit modal */}
       {editPost && (
-        <div className="modal-backdrop" onClick={()=>setEditPost(null)}>
-          <div className="modal" style={{width:580}} onClick={e=>e.stopPropagation()}>
-            <div className="modal-head">
-              <span className="modal-title">Edit Post Before Approving</span>
-              <button style={{background:"none",border:"none",cursor:"pointer",color:"var(--text-3)",fontSize:"1.1rem"}} onClick={()=>setEditPost(null)}>✕</button>
+        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.72)",backdropFilter:"blur(6px)",zIndex:500,display:"flex",alignItems:"center",justifyContent:"center",padding:20,animation:"fadeIn 0.2s ease"}}>
+          <div style={{...card,width:580,maxWidth:"96vw",maxHeight:"90vh",overflow:"auto"}}>
+            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:16}}>
+              <h3 style={{fontSize:"1rem",fontWeight:600,color:C.text1,fontFamily:"'Sora',system-ui"}}>Edit Post Before Approving</h3>
+              <button className="cl-btn" style={{background:"none",color:C.text3,fontSize:"1.1rem",padding:4}} onClick={()=>setEditPost(null)}>✕</button>
             </div>
-            <div className="modal-body">
-              <p style={{fontSize:"0.78rem",color:"var(--text-3)",marginBottom:10,lineHeight:1.6}}>
-                Make any changes to the content below. Your VA will see the updated version and the post will remain pending until you approve it.
-              </p>
-              <textarea
-                className="textarea"
-                style={{minHeight:160,fontSize:"0.87rem"}}
-                value={editContent}
-                onChange={e=>setEditContent(e.target.value)}
-              />
-              <div style={{marginTop:10,display:"flex",gap:8,flexWrap:"wrap"}}>
-                {editPost.platforms.map(p=>(
-                  <span key={p} style={{fontSize:"0.72rem",fontWeight:600,padding:"3px 10px",borderRadius:20,background:PLAT_META[p as Platform]?.bg,color:PLAT_META[p as Platform]?.color}}>
-                    {PLAT_META[p as Platform]?.label}
-                  </span>
-                ))}
-              </div>
+            <p style={{fontSize:"0.78rem",color:C.text3,marginBottom:10,lineHeight:1.6}}>
+              Make changes below. Your VA will see the update. The post stays pending until you click Approve.
+            </p>
+            <textarea
+              className="cl-input"
+              style={{...inp,minHeight:160,resize:"vertical",marginBottom:12,lineHeight:1.7}}
+              value={editContent}
+              onChange={e=>setEditContent(e.target.value)}
+            />
+            <div style={{display:"flex",gap:8,marginBottom:12,flexWrap:"wrap"}}>
+              {editPost.platforms.map(p=>(
+                <span key={p} style={{fontSize:"0.72rem",fontWeight:600,padding:"3px 10px",borderRadius:20,background:PLAT_META[p]?.bg,color:PLAT_META[p]?.color}}>
+                  {PLAT_META[p]?.label}
+                </span>
+              ))}
             </div>
-            <div className="modal-foot">
-              <button className="btn btn-secondary" onClick={()=>setEditPost(null)}>Cancel</button>
-              <button className="btn btn-primary" disabled={editSaving} onClick={saveEdit}>
-                {editSaving?<><span className="spinner" style={{marginRight:6}}/>Saving…</>:"Save & Keep Pending"}
+            <div style={{display:"flex",gap:10,justifyContent:"flex-end"}}>
+              <button className="cl-btn" style={{padding:"9px 18px",background:C.input,border:`1px solid ${C.border}`,borderRadius:8,color:C.text2,fontSize:"0.85rem"}} onClick={()=>setEditPost(null)}>Cancel</button>
+              <button className="cl-btn" disabled={editSaving} onClick={saveEdit}
+                style={{padding:"9px 18px",background:ACCENT,color:"#0B0F1A",borderRadius:8,fontWeight:600,fontSize:"0.85rem",display:"flex",alignItems:"center",gap:8}}>
+                {editSaving?<><Spinner/>Saving…</>:"Save Changes"}
               </button>
             </div>
           </div>
@@ -279,31 +348,35 @@ export default function ClientPortal() {
       )}
 
       {/* Header */}
-      <header style={{
-        height:64,background:"var(--bg-surface)",borderBottom:"1px solid var(--border)",
-        padding:"0 24px",display:"flex",alignItems:"center",gap:14,
-        position:"sticky",top:0,zIndex:100,
-      }}>
+      <header style={{height:64,background:C.surface,borderBottom:`1px solid ${C.border}`,padding:"0 24px",display:"flex",alignItems:"center",gap:14,position:"sticky",top:0,zIndex:100}}>
         <div style={{display:"flex",alignItems:"center",gap:10,flex:1}}>
-          <div style={{width:34,height:34,borderRadius:10,background:"linear-gradient(135deg,var(--accent),#00A896)",display:"flex",alignItems:"center",justifyContent:"center",boxShadow:"0 3px 10px var(--accent-glow)",flexShrink:0}}>
+          <div style={{width:34,height:34,borderRadius:10,background:`linear-gradient(135deg,${ACCENT},#00A896)`,display:"flex",alignItems:"center",justifyContent:"center",boxShadow:`0 3px 10px rgba(0,194,168,0.3)`,flexShrink:0}}>
             <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="white" strokeWidth="2.2" strokeLinecap="round">
               <path d="M10 2L18 6v8l-8 4-8-4V6z"/><path d="M10 2v12M2 6l8 4 8-4"/>
             </svg>
           </div>
           <div>
-            <div style={{fontFamily:"var(--font-head)",fontWeight:700,fontSize:"0.95rem",color:"var(--text-1)"}}>
-              Social<em style={{color:"var(--accent)",fontStyle:"normal"}}>OS</em> — Client Portal
+            <div style={{fontFamily:"'Sora',system-ui",fontWeight:700,fontSize:"0.95rem",color:C.text1}}>
+              Social<em style={{color:ACCENT,fontStyle:"normal"}}>OS</em> — Client Portal
             </div>
-            <div style={{fontSize:"0.68rem",color:"var(--text-3)"}}>
+            <div style={{fontSize:"0.68rem",color:C.text3}}>
               Welcome, {session?.user?.name?.split(" ")[0] ?? "Client"}
             </div>
           </div>
         </div>
         <div style={{display:"flex",gap:8,alignItems:"center"}}>
-          <button className="btn btn-secondary btn-sm" onClick={loadPosts}>
-            <RefreshIco/> Refresh
+          {/* Independent theme toggle */}
+          <button className="cl-btn" onClick={toggleTheme}
+            style={{width:36,height:36,borderRadius:8,background:C.input,border:`1px solid ${C.border}`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:16,color:C.text2}}>
+            {theme==="dark"?"☀️":"🌙"}
           </button>
-          <button className="btn btn-secondary btn-sm" onClick={()=>signOut({callbackUrl:"/client"})}>
+          <button className="cl-btn" onClick={loadPosts}
+            style={{padding:"7px 14px",borderRadius:8,background:C.input,border:`1px solid ${C.border}`,color:C.text2,fontSize:"0.82rem",display:"flex",alignItems:"center",gap:6}}>
+            <svg width="13" height="13" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M4 12a6 6 0 1 0 1-4M4 4v4h4"/></svg>
+            Refresh
+          </button>
+          <button className="cl-btn" onClick={()=>signOut({callbackUrl:"/client"})}
+            style={{padding:"7px 14px",borderRadius:8,background:C.input,border:`1px solid ${C.border}`,color:C.text2,fontSize:"0.82rem"}}>
             Sign out
           </button>
         </div>
@@ -316,47 +389,43 @@ export default function ClientPortal() {
         {pendingCount > 0 && (
           <div style={{
             display:"flex",alignItems:"center",gap:14,
-            padding:"14px 18px",background:"var(--accent-dim)",
-            border:"1px solid rgba(0,194,168,0.25)",borderRadius:"var(--radius-md)",marginBottom:24,
+            padding:"14px 18px",background:"rgba(0,194,168,0.10)",
+            border:"1px solid rgba(0,194,168,0.25)",borderRadius:12,marginBottom:24,
           }}>
-            <svg width="24" height="24" viewBox="0 0 20 20" fill="none" stroke="var(--accent)" strokeWidth="1.8" strokeLinecap="round">
+            <svg width="22" height="22" viewBox="0 0 20 20" fill="none" stroke={ACCENT} strokeWidth="1.8" strokeLinecap="round">
               <path d="M10 2a6 6 0 00-6 6v3l-1.5 2.5h15L16 11V8a6 6 0 00-6-6z"/>
               <path d="M8 16a2 2 0 004 0"/>
             </svg>
             <div style={{flex:1}}>
-              <div style={{fontFamily:"var(--font-head)",fontWeight:600,fontSize:"0.9rem",color:"var(--text-1)",marginBottom:2}}>
+              <div style={{fontFamily:"'Sora',system-ui",fontWeight:600,fontSize:"0.9rem",color:C.text1,marginBottom:2}}>
                 {pendingCount} post{pendingCount!==1?"s":""} awaiting your approval
               </div>
-              <div style={{fontSize:"0.78rem",color:"var(--text-2)"}}>
-                Review, approve or request changes below. Approved posts publish automatically.
+              <div style={{fontSize:"0.78rem",color:C.text2}}>
+                Review, approve or request changes. Approved posts publish automatically.
               </div>
             </div>
-            <button className="btn btn-primary btn-sm" onClick={()=>setTab("pending")}>
-              Review now
+            <button className="cl-btn" onClick={()=>setTab("pending")}
+              style={{padding:"8px 16px",background:ACCENT,color:"#0B0F1A",borderRadius:8,fontWeight:600,fontSize:"0.82rem"}}>
+              Review
             </button>
           </div>
         )}
 
         {/* Tabs */}
-        <div style={{
-          display:"flex",gap:0,marginBottom:20,
-          background:"var(--bg-card)",border:"1px solid var(--border)",
-          borderRadius:"var(--radius-md)",padding:4,
-        }}>
+        <div style={{display:"flex",gap:0,marginBottom:24,background:C.card,border:`1px solid ${C.border}`,borderRadius:12,padding:4}}>
           {(["pending","approved","published","topics"] as Tab[]).map(t=>(
-            <button key={t} onClick={()=>setTab(t)} style={{
-              flex:1,padding:"9px 6px",borderRadius:"var(--radius-sm)",
-              fontSize:"0.82rem",fontWeight:500,border:"none",cursor:"pointer",
-              fontFamily:"var(--font-body)",
-              background:tab===t?"var(--bg-surface)":"none",
-              color:tab===t?"var(--text-1)":"var(--text-3)",
-              boxShadow:tab===t?"var(--shadow-xs)":"none",
-              transition:"all var(--t-fast) var(--ease)",
-              display:"flex",alignItems:"center",justifyContent:"center",gap:6,
-            }}>
+            <button key={t} className="cl-btn" onClick={()=>setTab(t)}
+              style={{
+                flex:1,padding:"9px 6px",borderRadius:9,
+                fontSize:"0.82rem",fontWeight:500,
+                background:tab===t?C.surface:"none",
+                color:tab===t?C.text1:C.text3,
+                boxShadow:tab===t?"0 1px 4px rgba(0,0,0,0.10)":"none",
+                display:"flex",alignItems:"center",justifyContent:"center",gap:6,
+              }}>
               {{pending:"Pending",approved:"Approved",published:"Published",topics:"Submit Topic"}[t]}
-              {t==="pending" && pendingCount>0 && (
-                <span style={{background:"var(--accent)",color:"#0B0F1A",fontSize:"0.62rem",fontWeight:700,padding:"1px 6px",borderRadius:20}}>
+              {t==="pending"&&pendingCount>0&&(
+                <span style={{background:ACCENT,color:"#0B0F1A",fontSize:"0.62rem",fontWeight:700,padding:"1px 6px",borderRadius:20}}>
                   {pendingCount}
                 </span>
               )}
@@ -364,49 +433,37 @@ export default function ClientPortal() {
           ))}
         </div>
 
-        {/* Submit topic */}
+        {/* Topics */}
         {tab==="topics" && (
-          <div className="card card-pad">
-            <div style={{fontFamily:"var(--font-head)",fontSize:"0.95rem",fontWeight:600,marginBottom:6,color:"var(--text-1)"}}>
+          <div style={card}>
+            <h3 style={{fontFamily:"'Sora',system-ui",fontSize:"0.95rem",fontWeight:600,marginBottom:6,color:C.text1}}>
               Submit a Topic Idea
-            </div>
-            <p style={{fontSize:"0.82rem",color:"var(--text-3)",marginBottom:16,lineHeight:1.6}}>
-              Describe a topic or idea you want your VA to create a post about.
-              Select the platforms and add a media URL if you have one.
+            </h3>
+            <p style={{fontSize:"0.82rem",color:C.text3,marginBottom:20,lineHeight:1.6}}>
+              Describe a topic you want your VA to create a post about. Select the platforms and add a media URL if you have one.
             </p>
 
             <div style={{marginBottom:14}}>
-              <label style={{fontSize:"0.78rem",fontWeight:600,color:"var(--text-2)",marginBottom:6,display:"block"}}>Topic / Idea</label>
-              <textarea
-                className="textarea"
-                style={{minHeight:100,fontSize:"0.875rem"}}
-                placeholder="e.g. Share our Q2 results and what the team is proud of this quarter. Highlight the 30% growth in user sign-ups."
+              <label style={lbl}>Topic / Idea</label>
+              <textarea className="cl-input"
+                style={{...inp,minHeight:100,resize:"vertical",lineHeight:1.7}}
+                placeholder="e.g. Share our Q2 results and highlight the 30% growth in user sign-ups."
                 value={topicText}
                 onChange={e=>setTopicText(e.target.value)}
               />
             </div>
 
             <div style={{marginBottom:14}}>
-              <label style={{fontSize:"0.78rem",fontWeight:600,color:"var(--text-2)",marginBottom:8,display:"block"}}>Platforms</label>
+              <label style={lbl}>Platforms</label>
               <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
                 {ALL_PLATFORMS.map(p=>{
-                  const on = topicPlats.has(p);
-                  const m  = PLAT_META[p];
+                  const on=topicPlats.has(p); const m=PLAT_META[p];
                   return (
-                    <button key={p} onClick={()=>{
-                      setTopicPlats(prev=>{
-                        const n=new Set<Platform>(Array.from(prev));
-                        on?n.delete(p):n.add(p);
-                        return n;
-                      });
-                    }} style={{
-                      padding:"6px 14px",borderRadius:20,fontSize:"0.78rem",fontWeight:500,
-                      border:`1px solid ${on?m.color:"var(--border)"}`,
-                      background:on?m.bg:"var(--bg-input)",
-                      color:on?m.color:"var(--text-2)",
-                      cursor:"pointer",fontFamily:"var(--font-body)",
-                      transition:"all var(--t-fast) var(--ease)",
-                    }}>
+                    <button key={p} className="cl-btn"
+                      style={{padding:"6px 14px",borderRadius:20,fontSize:"0.78rem",fontWeight:500,border:`1px solid ${on?m.color:C.border}`,background:on?m.bg:C.input,color:on?m.color:C.text2}}
+                      onClick={()=>{
+                        setTopicPlats(prev=>{const n=new Set<Platform>(Array.from(prev));on?n.delete(p):n.add(p);return n;});
+                      }}>
                       {on&&"✓ "}{m.label}
                     </button>
                   );
@@ -414,20 +471,22 @@ export default function ClientPortal() {
               </div>
             </div>
 
-            <div style={{marginBottom:16}}>
-              <label style={{fontSize:"0.78rem",fontWeight:600,color:"var(--text-2)",marginBottom:6,display:"block"}}>Media URL (optional)</label>
-              <input type="url" className="input" placeholder="Google Drive share link to an image or video"
+            <div style={{marginBottom:20}}>
+              <label style={lbl}>Media URL (optional)</label>
+              <input type="url" className="cl-input"
+                style={{...inp}} placeholder="Google Drive / Dropbox share link to an image or video"
                 value={topicMedia} onChange={e=>setTopicMedia(e.target.value)}/>
             </div>
 
             {topicMsg && (
-              <div style={{fontSize:"0.82rem",color:topicMsg.includes("submit")||topicMsg.includes("sent")?"var(--success)":"var(--danger)",marginBottom:12,fontWeight:500}}>
-                {topicMsg}
+              <div style={{fontSize:"0.82rem",fontWeight:500,color:topicMsg.ok?SUCCESS:DANGER,marginBottom:12}}>
+                {topicMsg.text}
               </div>
             )}
 
-            <button className="btn btn-primary" disabled={topicSaving} onClick={submitTopic}>
-              {topicSaving?<><span className="spinner" style={{marginRight:6}}/>Submitting…</>:"Submit to VA"}
+            <button className="cl-btn" disabled={topicSaving} onClick={submitTopic}
+              style={{padding:"10px 24px",background:ACCENT,color:"#0B0F1A",borderRadius:9,fontWeight:600,fontSize:"0.87rem",display:"flex",alignItems:"center",gap:8}}>
+              {topicSaving?<><Spinner/>Submitting…</>:"Submit to VA"}
             </button>
           </div>
         )}
@@ -435,91 +494,98 @@ export default function ClientPortal() {
         {/* Post lists */}
         {tab !== "topics" && (
           postsLoading ? (
-            <div style={{display:"flex",justifyContent:"center",padding:48}}>
-              <div className="spinner spinner-lg"/>
+            <div style={{display:"flex",justifyContent:"center",padding:56}}>
+              <Spinner size={36}/>
             </div>
-          ) : filtered.length===0 ? (
-            <div className="card card-pad" style={{textAlign:"center",padding:48}}>
-              <div style={{fontFamily:"var(--font-head)",fontSize:"0.95rem",fontWeight:600,marginBottom:8,color:"var(--text-1)"}}>
+          ) : (byTab[tab as "pending"|"approved"|"published"] ?? []).length===0 ? (
+            <div style={{...card,textAlign:"center",padding:56}}>
+              <div style={{fontFamily:"'Sora',system-ui",fontSize:"0.95rem",fontWeight:600,marginBottom:8,color:C.text1}}>
                 {tab==="pending"?"Nothing needs your approval right now":`No ${tab} posts yet`}
               </div>
-              <p style={{fontSize:"0.82rem",color:"var(--text-3)",lineHeight:1.6}}>
+              <p style={{fontSize:"0.82rem",color:C.text3,lineHeight:1.6}}>
                 {tab==="pending"
-                  ?"Your VA will notify you when new posts are ready for review."
+                  ?"Your VA will notify you when new posts are ready."
                   :"Posts will appear here once they exist."}
               </p>
             </div>
           ) : (
             <div style={{display:"flex",flexDirection:"column",gap:14}}>
-              {filtered.map(post=>(
-                <div key={post.id} className="card card-pad">
-                  {/* Platforms + schedule */}
+              {(byTab[tab as "pending"|"approved"|"published"] ?? []).map(post=>(
+                <div key={post.id} style={card}>
+                  {/* Platform tags + schedule */}
                   <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:14,flexWrap:"wrap"}}>
                     {post.platforms.map(p=>(
-                      <span key={p} style={{
-                        fontSize:"0.72rem",fontWeight:600,padding:"3px 10px",borderRadius:20,
-                        background:PLAT_META[p as Platform]?.bg??"var(--bg-input)",
-                        color:PLAT_META[p as Platform]?.color??"var(--text-3)",
-                      }}>
-                        {PLAT_META[p as Platform]?.label??p}
+                      <span key={p} style={{fontSize:"0.72rem",fontWeight:600,padding:"3px 10px",borderRadius:20,background:PLAT_META[p]?.bg,color:PLAT_META[p]?.color}}>
+                        {PLAT_META[p]?.label??p}
                       </span>
                     ))}
-                    <span style={{marginLeft:"auto",fontSize:"0.72rem",color:"var(--text-3)"}}>
+                    <span style={{marginLeft:"auto",fontSize:"0.72rem",color:C.text3}}>
                       {post.scheduledAt?new Date(post.scheduledAt).toLocaleString():"No schedule set"}
                     </span>
                   </div>
 
-                  {/* Content */}
+                  {/* Content — exact whitespace preserved */}
                   <div style={{
-                    fontSize:"0.9rem",lineHeight:1.8,color:"var(--text-1)",
-                    marginBottom:16,padding:"14px 16px",
-                    background:"var(--bg-input)",borderRadius:"var(--radius-sm)",
-                    border:"1px solid var(--border)",
+                    fontSize:"0.9rem",lineHeight:1.8,color:C.text1,
+                    marginBottom:14,padding:"14px 16px",
+                    background:C.input,borderRadius:9,
+                    border:`1px solid ${C.border}`,
+                    whiteSpace:"pre-wrap",wordBreak:"break-word",
                   }}>
                     {post.content}
                   </div>
 
                   {/* Media */}
                   {post.mediaUrl && (
-                    <div style={{fontSize:"0.78rem",color:"var(--text-3)",marginBottom:12}}>
+                    <div style={{fontSize:"0.78rem",color:C.text3,marginBottom:12}}>
                       Media: <a href={post.mediaUrl} target="_blank" rel="noopener noreferrer"
-                        style={{color:"var(--blue)",textDecoration:"underline"}}>
-                        View attached media
-                      </a>
+                        style={{color:BLUE,textDecoration:"underline"}}>View attached media</a>
                     </div>
                   )}
 
-                  {/* Actions */}
+                  {/* Status + actions */}
                   <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",flexWrap:"wrap",gap:10}}>
-                    <span className={`pill ${PILL_CLS[post.status]??"pill-draft"}`}>{post.status}</span>
+                    <span style={{
+                      fontSize:"0.68rem",fontWeight:600,padding:"4px 10px",borderRadius:20,
+                      textTransform:"capitalize",
+                      background:post.status==="published"?"rgba(34,197,94,0.12)":post.status==="approved"?"rgba(79,142,247,0.12)":post.status==="pending"?"rgba(245,158,11,0.12)":"rgba(255,255,255,0.06)",
+                      color:post.status==="published"?SUCCESS:post.status==="approved"?BLUE:post.status==="pending"?GOLD:C.text3,
+                    }}>
+                      {post.status}
+                    </span>
 
                     {post.status==="pending" && (
                       <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
-                        <button className="btn btn-secondary btn-sm"
-                          disabled={!!acting} onClick={()=>{setEditPost(post);setEditContent(post.content);}}>
+                        <button className="cl-btn"
+                          style={{padding:"7px 14px",borderRadius:8,background:C.input,border:`1px solid ${C.border}`,color:C.text2,fontSize:"0.82rem"}}
+                          disabled={!!acting}
+                          onClick={()=>{setEditPost(post);setEditContent(post.content);}}>
                           Edit
                         </button>
-                        <button className="btn btn-secondary btn-sm"
-                          disabled={!!acting} onClick={()=>requestChanges(post)}>
+                        <button className="cl-btn"
+                          style={{padding:"7px 14px",borderRadius:8,background:C.input,border:`1px solid ${C.border}`,color:C.text2,fontSize:"0.82rem"}}
+                          disabled={!!acting}
+                          onClick={()=>requestChanges(post)}>
                           Request Changes
                         </button>
-                        <button className="btn btn-primary btn-sm"
-                          disabled={!!acting} onClick={()=>approve(post)}>
-                          {acting===post.id?<span className="spinner"/>:<CheckIco/>}
+                        <button className="cl-btn"
+                          style={{padding:"7px 16px",borderRadius:8,background:ACCENT,color:"#0B0F1A",fontWeight:600,fontSize:"0.82rem",display:"flex",alignItems:"center",gap:6}}
+                          disabled={!!acting}
+                          onClick={()=>approve(post)}>
+                          {acting===post.id?<Spinner/>:<CheckIco/>}
                           Approve
                         </button>
                       </div>
                     )}
 
-                    {post.status==="published" && post.publishedAt && (
-                      <span style={{fontSize:"0.72rem",color:"var(--success)",fontWeight:500}}>
-                        ✓ Published {new Date(post.publishedAt).toLocaleString()}
+                    {post.status==="approved"&&(
+                      <span style={{fontSize:"0.72rem",color:BLUE,fontWeight:500}}>
+                        ✓ Approved — publishes at scheduled time
                       </span>
                     )}
-
-                    {post.status==="approved" && (
-                      <span style={{fontSize:"0.72rem",color:"var(--blue)",fontWeight:500}}>
-                        Approved — will publish at scheduled time
+                    {post.status==="published"&&post.publishedAt&&(
+                      <span style={{fontSize:"0.72rem",color:SUCCESS,fontWeight:500}}>
+                        ✓ Published {new Date(post.publishedAt).toLocaleString()}
                       </span>
                     )}
                   </div>
@@ -533,6 +599,9 @@ export default function ClientPortal() {
   );
 }
 
+function Spinner({ size=14 }:{size?:number}) {
+  return <div style={{width:size,height:size,borderRadius:"50%",border:"2px solid rgba(255,255,255,0.2)",borderTopColor:"currentColor",animation:"spin 0.7s linear infinite",flexShrink:0}}/>;
+}
 function GoogleIcon() {
   return (
     <svg width="18" height="18" viewBox="0 0 24 24">
@@ -543,5 +612,6 @@ function GoogleIcon() {
     </svg>
   );
 }
-function CheckIco()   { return <svg width="14" height="14" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><path d="M4 10l4 4 8-8"/></svg>; }
-function RefreshIco() { return <svg width="14" height="14" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M4 12a6 6 0 1 0 1-4M4 4v4h4"/></svg>; }
+function CheckIco() {
+  return <svg width="13" height="13" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><path d="M4 10l4 4 8-8"/></svg>;
+}

@@ -1,7 +1,8 @@
 "use client";
 
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
+import { useSession } from "next-auth/react";
 import { PLATFORM_META, CHAR_LIMITS, type Platform } from "@/types";
 
 const ALL_PLATFORMS: Platform[] = ["linkedin","instagram","facebook","x","tiktok"];
@@ -12,14 +13,16 @@ function useToast() {
   const show = useCallback((msg:string, type:ToastType="info") => {
     const id = Date.now();
     setToasts(t => [...t,{id,msg,type}]);
-    setTimeout(() => setToasts(t => t.filter(x => x.id !== id)), 5000);
+    setTimeout(() => setToasts(t => t.filter(x => x.id !== id)), 6000);
   },[]);
   return { toasts, show };
 }
 
 export default function ComposePage() {
   const router = useRouter();
+  const { data: session } = useSession();
   const { toasts, show:toast } = useToast();
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const [content,       setContent]       = useState("");
   const [liOverride,    setLiOverride]     = useState("");
@@ -32,11 +35,10 @@ export default function ComposePage() {
   const [overridesOpen, setOverridesOpen]  = useState<Set<string>>(new Set());
   const [submitting,    setSubmitting]     = useState(false);
   const [scheduleModal, setScheduleModal]  = useState(false);
+  const [publishedPostId,setPublishedPostId]= useState<string|null>(null);
+  const [postStatus,    setPostStatus]     = useState<string|null>(null);
 
-  // Post status polling after Publish Now
-  const [publishedPostId, setPublishedPostId] = useState<string|null>(null);
-  const [postStatus,      setPostStatus]      = useState<string|null>(null);
-
+  // Status polling after Publish Now
   useEffect(() => {
     if (!publishedPostId) return;
     let attempts = 0;
@@ -45,27 +47,68 @@ export default function ComposePage() {
       try {
         const res = await fetch("/api/posts").then(r=>r.json());
         if (res.ok) {
-          const post = res.data.find((p:any) => p.id === publishedPostId);
+          const post = (res.data as any[]).find(p => p.id === publishedPostId);
           if (post) {
             setPostStatus(post.status);
-            if (post.status === "published" || post.status === "failed" || post.status === "partial") {
+            if (["published","failed","partial"].includes(post.status)) {
               clearInterval(id);
-              if (post.status === "published") {
-                toast("Post published successfully! ✓","success");
-              } else if (post.status === "failed") {
-                toast(`Post failed: ${post.errorMsg || "Check Make.com history"}`, "error");
-              } else if (post.status === "partial") {
-                toast("Post partially published — some platforms failed. Check Schedule.","warn");
-              }
+              if (post.status === "published")
+                toast("✓ Post published successfully!","success");
+              else if (post.status === "failed")
+                toast(`✗ Post failed: ${post.errorMsg || "Check Make.com history"}`, "error");
+              else
+                toast("⚠ Partially published — some platforms failed. Check Schedule.","warn");
             }
           }
         }
       } catch {}
-      if (attempts >= 12) clearInterval(id); // stop after 2 minutes
-    }, 10_000); // check every 10 seconds
+      if (attempts >= 18) clearInterval(id); // stop after 3 min
+    }, 10_000);
     return () => clearInterval(id);
   }, [publishedPostId, toast]);
 
+  // ── Formatting tools ──────────────────────────────────────────────────────
+  // Works by inserting/wrapping text at the cursor position in the textarea.
+  // Content is plain text — formatting characters are preserved exactly as typed.
+  function insertAtCursor(before: string, after = "", placeholder = "") {
+    const el = textareaRef.current;
+    if (!el) return;
+    const start = el.selectionStart;
+    const end   = el.selectionEnd;
+    const selected = el.value.substring(start, end);
+    const insert = selected ? `${before}${selected}${after}` : `${before}${placeholder}${after}`;
+    const newVal = el.value.substring(0, start) + insert + el.value.substring(end);
+    setContent(newVal);
+    // Restore cursor position after React re-render
+    requestAnimationFrame(() => {
+      el.focus();
+      const cursorPos = start + before.length + (selected || placeholder).length;
+      el.setSelectionRange(cursorPos, cursorPos);
+    });
+  }
+
+  function insertHashtag() {
+    const el = textareaRef.current;
+    if (!el) return;
+    const pos = el.selectionStart;
+    // If there's no space before, add one
+    const before = pos > 0 && el.value[pos-1] !== " " && el.value[pos-1] !== "\n" ? " #" : "#";
+    insertAtCursor(before, "", "hashtag");
+  }
+
+  function insertMention() {
+    const el = textareaRef.current;
+    if (!el) return;
+    const pos = el.selectionStart;
+    const before = pos > 0 && el.value[pos-1] !== " " && el.value[pos-1] !== "\n" ? " @" : "@";
+    insertAtCursor(before, "", "name");
+  }
+
+  function insertNewLine() {
+    insertAtCursor("\n");
+  }
+
+  // ── Platform helpers ──────────────────────────────────────────────────────
   function togglePlat(p: Platform) {
     setSelectedPlats(prev => {
       const n = new Set<Platform>(Array.from(prev));
@@ -90,35 +133,97 @@ export default function ComposePage() {
     return p === "x" ? content.substring(0,280) : content;
   }
 
-  // Instagram requires an image — warn the user
+  const igNeedsImage = selectedPlats.has("instagram") && !mediaUrl.trim();
+
   function validateInstagram(): boolean {
-    if (selectedPlats.has("instagram") && !mediaUrl.trim()) {
-      toast("Instagram requires a media URL (image or video). Add one in the Media field or deselect Instagram.", "warn");
+    if (igNeedsImage) {
+      toast("⚠ Instagram requires a media URL. Add an image/video link or remove Instagram.", "warn");
       return false;
     }
     return true;
   }
 
+  // ── Save draft ────────────────────────────────────────────────────────────
   async function saveDraft() {
     if (!content.trim()) { toast("Write some content first","error"); return; }
     setSubmitting(true);
     try {
-      const res = await fetch("/api/posts",{
-        method:"POST", headers:{"Content-Type":"application/json"},
-        body: JSON.stringify({
-          content, liOverride, xOverride, igOverride,
-          platforms: Array.from(selectedPlats),
-          mediaUrl, scheduledAt, status:"draft",
-        }),
-      }).then(r => r.json());
-      if (res.ok) {
-        toast("Draft saved to your Google Sheet ✓","success");
+      const body = {
+        content,
+        liOverride: liOverride || undefined,
+        xOverride:  xOverride  || undefined,
+        igOverride: igOverride || undefined,
+        platforms:  Array.from(selectedPlats),
+        mediaUrl:   mediaUrl.trim() || undefined,
+        scheduledAt: scheduledAt || undefined,
+        status:     "draft",
+        clientId:   session?.user?.email ?? "va",
+      };
+      const res = await fetch("/api/posts", {
+        method:  "POST",
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify(body),
+      });
+      const data = await res.json();
+      if (res.ok && data.ok) {
+        toast(`✓ Draft saved (ID: ${data.data?.id?.slice(-8)})`, "success");
       } else {
-        toast(`Save failed: ${res.error}`,"error");
+        toast(`✗ Save failed: ${data.error || "Unknown error — check your Google Sheets connection"}`, "error");
       }
-    } finally { setSubmitting(false); }
+    } catch (e: any) {
+      toast(`✗ Network error: ${e.message}`, "error");
+    } finally {
+      setSubmitting(false);
+    }
   }
 
+  // ── Schedule ──────────────────────────────────────────────────────────────
+  async function schedulePost() {
+    if (!content.trim())         { toast("Write content first","error"); return; }
+    if (!scheduledAt)            { toast("Pick a schedule time","error"); return; }
+    if (selectedPlats.size === 0){ toast("Select at least one platform","error"); return; }
+    if (!validateInstagram())    return;
+
+    setSubmitting(true);
+    try {
+      const body = {
+        content,
+        liOverride: liOverride || undefined,
+        xOverride:  xOverride  || undefined,
+        igOverride: igOverride || undefined,
+        platforms:  Array.from(selectedPlats),
+        mediaUrl:   mediaUrl.trim() || undefined,
+        scheduledAt,
+        status:     "approved",
+        clientId:   session?.user?.email ?? "va",
+      };
+      const res  = await fetch("/api/posts", {
+        method:  "POST",
+        headers: { "Content-Type":"application/json" },
+        body:    JSON.stringify(body),
+      });
+      const data = await res.json();
+
+      if (res.ok && data.ok) {
+        toast(`✓ Post scheduled for ${new Date(scheduledAt).toLocaleString()} — Apps Script will fire it automatically`, "success");
+        setScheduleModal(false);
+        // Reset form
+        setContent(""); setMediaUrl(""); setScheduledAt("");
+        setLiOverride(""); setXOverride(""); setIgOverride("");
+        setTimeout(() => router.push("/dashboard/schedule"), 2000);
+      } else {
+        const errMsg = data.error || "Unknown error";
+        toast(`✗ Schedule failed: ${errMsg}`, "error");
+        // Keep modal open so user sees the error
+      }
+    } catch (e: any) {
+      toast(`✗ Network error: ${e.message}`, "error");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  // ── Publish now ───────────────────────────────────────────────────────────
   async function publishNow() {
     if (!content.trim())         { toast("Write some content first","error"); return; }
     if (selectedPlats.size === 0){ toast("Select at least one platform","error"); return; }
@@ -130,64 +235,37 @@ export default function ComposePage() {
 
     try {
       const platforms = Array.from(selectedPlats);
-      const res = await fetch("/api/publish",{
-        method:"POST", headers:{"Content-Type":"application/json"},
+      const res  = await fetch("/api/publish", {
+        method:  "POST",
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          content, liOverride, xOverride, igOverride,
+          content,
+          liOverride: liOverride || undefined,
+          xOverride:  xOverride  || undefined,
+          igOverride: igOverride || undefined,
           platforms,
-          mediaUrl: mediaUrl.trim() || null,
+          mediaUrl:   mediaUrl.trim() || null,
           scheduledAt: new Date().toISOString(),
+          clientId:   session?.user?.email ?? "va",
         }),
-      }).then(r => r.json());
+      });
+      const data = await res.json();
 
-      if (res.ok) {
-        setPublishedPostId(res.data.id);
+      if (res.ok && data.ok) {
+        setPublishedPostId(data.data.id);
         setPostStatus("publishing");
-        const platNames = platforms.map(p => p.charAt(0).toUpperCase()+p.slice(1)).join(", ");
-        toast(`Sent to Make.com → ${platNames}. Checking status every 10s…`,"info");
+        const platNames = platforms.map(p => PLATFORM_META[p]?.label || p).join(", ");
+        toast(`Sent to Make.com → ${platNames}. Checking status every 10s…`, "info");
       } else {
-        toast(`Publish failed: ${res.error}`,"error");
+        toast(`✗ Publish failed: ${data.error || "Unknown error"}`, "error");
       }
-    } finally { setSubmitting(false); }
-  }
-
-  async function schedulePost() {
-    if (!content.trim())         { toast("Write content first","error"); return; }
-    if (!scheduledAt)            { toast("Pick a schedule time","error"); return; }
-    if (selectedPlats.size === 0){ toast("Select at least one platform","error"); return; }
-    if (!validateInstagram())    return;
-
-    setSubmitting(true);
-    try {
-      const res = await fetch("/api/posts",{
-        method:"POST", headers:{"Content-Type":"application/json"},
-        body: JSON.stringify({
-          content, liOverride, xOverride, igOverride,
-          platforms: Array.from(selectedPlats),
-          mediaUrl: mediaUrl.trim() || null,
-          scheduledAt,
-          status:"approved",
-        }),
-      }).then(r => r.json());
-
-      if (res.ok) {
-        toast(`Post scheduled for ${new Date(scheduledAt).toLocaleString()} ✓ — Apps Script will fire it automatically`,"success");
-        setScheduleModal(false);
-        // Reset form
-        setContent(""); setMediaUrl(""); setScheduledAt("");
-        setLiOverride(""); setXOverride(""); setIgOverride("");
-        // Brief pause then navigate to schedule to see the new post
-        setTimeout(() => router.push("/dashboard/schedule"), 2000);
-      } else {
-        // Keep modal open so user can see the error
-        toast(`Schedule failed: ${res.error || "Unknown error. Check your Google Sheet connection."}`,"error");
-      }
-    } finally { setSubmitting(false); }
+    } finally {
+      setSubmitting(false);
+    }
   }
 
   const charCount = content.length;
   const xLeft     = 280 - (xOverride || content).substring(0,280).length;
-  const igNeedsImage = selectedPlats.has("instagram") && !mediaUrl.trim();
 
   return (
     <div style={{position:"relative"}}>
@@ -207,8 +285,8 @@ export default function ComposePage() {
         ))}
       </div>
 
-      {/* Live publish status bar */}
-      {postStatus && postStatus !== "published" && postStatus !== "failed" && postStatus !== "partial" && (
+      {/* Publishing status bar */}
+      {postStatus && !["published","failed","partial"].includes(postStatus) && (
         <div style={{
           marginBottom:16,padding:"12px 16px",
           background:"var(--blue-dim)",border:"1px solid rgba(79,142,247,0.25)",
@@ -216,9 +294,9 @@ export default function ComposePage() {
           display:"flex",alignItems:"center",gap:12,fontSize:"0.85rem",
         }}>
           <span className="spinner"/>
-          <span style={{color:"var(--text-1)"}}>
+          <span style={{color:"var(--text-1)",flex:1}}>
             Publishing in progress — status: <strong style={{color:"var(--blue)"}}>{postStatus}</strong>.
-            This page will notify you when it completes.
+            You will be notified when complete.
           </span>
           <button className="btn btn-secondary btn-sm" onClick={()=>router.push("/dashboard/schedule")}>
             View in Schedule
@@ -228,53 +306,52 @@ export default function ComposePage() {
 
       {/* Schedule modal */}
       {scheduleModal && (
-        <div className="modal-backdrop" onClick={() => setScheduleModal(false)}>
-          <div className="modal" onClick={e => e.stopPropagation()}>
+        <div className="modal-backdrop" onClick={()=>setScheduleModal(false)}>
+          <div className="modal" onClick={e=>e.stopPropagation()}>
             <div className="modal-head">
               <span className="modal-title">Confirm Schedule</span>
               <button style={{background:"none",border:"none",cursor:"pointer",color:"var(--text-3)",fontSize:"1.1rem"}}
-                onClick={() => setScheduleModal(false)}>✕</button>
+                onClick={()=>setScheduleModal(false)}>✕</button>
             </div>
             <div className="modal-body">
-              {/* Toast area inside modal too */}
-              {toasts.length > 0 && toasts.some(t=>t.type==="error") && (
-                <div style={{padding:"10px 12px",background:"var(--danger-dim)",border:"1px solid rgba(239,68,68,0.25)",borderRadius:"var(--radius-sm)",marginBottom:14,fontSize:"0.82rem",color:"var(--danger)"}}>
-                  {toasts.find(t=>t.type==="error")?.msg}
+              {/* Show error toasts inside modal */}
+              {toasts.filter(t=>t.type==="error").map(t=>(
+                <div key={t.id} style={{padding:"10px 12px",background:"var(--danger-dim)",border:"1px solid rgba(239,68,68,0.25)",borderRadius:"var(--radius-sm)",fontSize:"0.82rem",color:"var(--danger)",marginBottom:14}}>
+                  {t.msg}
                 </div>
-              )}
+              ))}
 
-              <div style={{padding:"12px 14px",background:"var(--bg-input)",borderRadius:"var(--radius-sm)",border:"1px solid var(--border)",fontSize:"0.85rem",lineHeight:1.5,marginBottom:16,color:"var(--text-2)"}}>
-                {(content||"No content yet").substring(0,140)}{content.length>140?"…":""}
+              <div style={{padding:"12px 14px",background:"var(--bg-input)",borderRadius:"var(--radius-sm)",border:"1px solid var(--border)",fontSize:"0.85rem",lineHeight:1.6,marginBottom:16,color:"var(--text-2)",whiteSpace:"pre-wrap",maxHeight:120,overflow:"auto"}}>
+                {(content||"No content yet").substring(0,200)}{content.length>200?"…":""}
               </div>
 
               <div className="form-group">
                 <label className="form-label">Schedule time</label>
                 <input type="datetime-local" className="input" value={scheduledAt}
-                  onChange={e => setScheduledAt(e.target.value)}
+                  onChange={e=>setScheduledAt(e.target.value)}
                   style={{colorScheme:"dark"}}/>
               </div>
 
               {igNeedsImage && (
                 <div style={{padding:"10px 12px",background:"var(--gold-dim)",border:"1px solid rgba(245,158,11,0.25)",borderRadius:"var(--radius-sm)",fontSize:"0.82rem",color:"var(--gold)",marginBottom:14}}>
-                  ⚠ Instagram is selected but no media URL is provided. Instagram requires an image or video. Add a URL below or remove Instagram.
+                  ⚠ Instagram selected but no media URL. Instagram requires an image/video.
                 </div>
               )}
 
               <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:14}}>
-                {Array.from(selectedPlats).map(p => (
-                  <span key={p} style={{
-                    fontSize:"0.72rem",fontWeight:600,padding:"3px 10px",borderRadius:20,
-                    background:PLATFORM_META[p].bg, color:PLATFORM_META[p].color,
-                  }}>{PLATFORM_META[p].label}</span>
+                {Array.from(selectedPlats).map(p=>(
+                  <span key={p} style={{fontSize:"0.72rem",fontWeight:600,padding:"3px 10px",borderRadius:20,background:PLATFORM_META[p].bg,color:PLATFORM_META[p].color}}>
+                    {PLATFORM_META[p].label}
+                  </span>
                 ))}
               </div>
 
               <div style={{padding:"10px 12px",background:"var(--accent-dim)",border:"1px solid rgba(0,194,168,0.20)",borderRadius:"var(--radius-sm)",fontSize:"0.78rem",color:"var(--text-2)",lineHeight:1.6}}>
-                Post saved as "approved". Apps Script checks every 5 minutes and fires the Make.com webhook at the scheduled time.
+                Post saved as "approved". Apps Script fires the Make.com webhook at the scheduled time.
               </div>
             </div>
             <div className="modal-foot">
-              <button className="btn btn-secondary" onClick={() => setScheduleModal(false)}>Cancel</button>
+              <button className="btn btn-secondary" disabled={submitting} onClick={()=>setScheduleModal(false)}>Cancel</button>
               <button className="btn btn-primary" disabled={submitting} onClick={schedulePost}>
                 {submitting ? <><span className="spinner" style={{marginRight:6}}/>Saving…</> : <><CalIco/> Confirm Schedule</>}
               </button>
@@ -283,7 +360,6 @@ export default function ComposePage() {
         </div>
       )}
 
-      {/* Two-column layout */}
       <div className="compose-layout">
 
         {/* LEFT — Editor */}
@@ -293,7 +369,7 @@ export default function ComposePage() {
               Compose Post
             </h2>
             <p style={{fontSize:"0.8rem",color:"var(--text-2)"}}>
-              Select platforms, write content, add per-platform overrides, then preview before publishing.
+              Your content is sent to platforms exactly as written — all spaces, line breaks, hashtags and mentions are preserved.
             </p>
           </div>
 
@@ -307,8 +383,7 @@ export default function ComposePage() {
                 <button key={p} className={`plat-tab${on?" selected":""}`}
                   onClick={() => togglePlat(p)}
                   style={on ? {background:m.bg,borderColor:m.color,color:m.color} : {}}>
-                  {on && <span style={{fontSize:"0.7rem"}}>✓ </span>}
-                  {m.label}
+                  {on && "✓ "}{m.label}
                 </button>
               );
             })}
@@ -317,36 +392,69 @@ export default function ComposePage() {
           {/* Instagram warning */}
           {igNeedsImage && (
             <div style={{padding:"10px 12px",background:"var(--gold-dim)",border:"1px solid rgba(245,158,11,0.25)",borderRadius:"var(--radius-sm)",fontSize:"0.78rem",color:"var(--gold)",marginBottom:14,lineHeight:1.6}}>
-              ⚠ Instagram requires a media URL (image or video). Add one below — otherwise Instagram will be skipped.
+              ⚠ Instagram is selected but no media URL is provided. Instagram's API requires an image or video.
             </div>
           )}
 
           {/* Editor */}
           <div className="section-label" style={{marginBottom:8}}>Content</div>
-          <div style={{borderRadius:"var(--radius-sm)",overflow:"hidden",marginBottom:6}}>
-            <div className="editor-toolbar">
-              {["B","I"].map(l => (
-                <button key={l} className="tool-btn"
-                  style={{fontWeight:l==="B"?700:400,fontStyle:l==="I"?"italic":"normal"}}>
-                  {l}
-                </button>
-              ))}
+          <div style={{borderRadius:"var(--radius-sm)",overflow:"hidden",marginBottom:6,border:"1px solid var(--border)"}}>
+            {/* Formatting toolbar — all buttons actually work */}
+            <div className="editor-toolbar" style={{borderBottom:"1px solid var(--border)"}}>
+              <button className="tool-btn" title="Bold — wraps selected text in **bold**"
+                style={{fontWeight:700}}
+                onClick={() => insertAtCursor("**","**","bold text")}>
+                B
+              </button>
+              <button className="tool-btn" title="Italic — wraps selected text in _italic_"
+                style={{fontStyle:"italic"}}
+                onClick={() => insertAtCursor("_","_","italic text")}>
+                I
+              </button>
               <div className="tool-sep"/>
-              <button className="tool-btn" title="Hashtag">#</button>
-              <button className="tool-btn" title="Mention">@</button>
+              <button className="tool-btn" title="New line break"
+                onClick={insertNewLine}>
+                ↵
+              </button>
+              <button className="tool-btn" title="Insert hashtag"
+                onClick={insertHashtag}>
+                #
+              </button>
+              <button className="tool-btn" title="Insert mention"
+                onClick={insertMention}>
+                @
+              </button>
+              <div className="tool-sep"/>
+              <button className="tool-btn" title="Bullet point"
+                onClick={() => insertAtCursor("\n• ","","item")}>
+                •
+              </button>
+              <button className="tool-btn" title="Numbered list"
+                onClick={() => insertAtCursor("\n1. ","","item")}>
+                1.
+              </button>
+              <div className="tool-sep"/>
+              <span style={{marginLeft:"auto",fontSize:"0.68rem",color:"var(--text-3)",padding:"0 8px",lineHeight:"28px"}}>
+                Tip: select text then click a tool to wrap it
+              </span>
             </div>
             <textarea
+              ref={textareaRef}
               className="textarea"
-              style={{borderRadius:"0 0 var(--radius-sm) var(--radius-sm)",minHeight:160,borderTop:"none"}}
-              placeholder="Write your post content here. This will be used across all selected platforms unless you add a platform-specific override below…"
+              style={{
+                borderRadius:0,minHeight:180,border:"none",
+                fontFamily:"var(--font-body)",fontSize:"0.9rem",lineHeight:1.7,
+                resize:"vertical",
+              }}
+              placeholder={"Write your post here...\n\nUse the toolbar above to format.\nAll spacing, line breaks, #hashtags and @mentions are preserved exactly.\n\nLinkedIn tip: paste content formatted with LinkedIn's own editor for rich formatting."}
               value={content}
               onChange={e => setContent(e.target.value)}
-              rows={7}
+              rows={8}
             />
           </div>
           <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:16,padding:"0 2px"}}>
             <span className={`char-count${charCount>2200?" char-over":charCount>280?" char-warn":""}`}>
-              {charCount} characters
+              {charCount.toLocaleString()} characters
             </span>
             <span style={{display:"flex",gap:10,fontSize:"0.70rem",color:"var(--text-3)"}}>
               <span>LI: {CHAR_LIMITS.linkedin.toLocaleString()}</span>
@@ -358,19 +466,18 @@ export default function ComposePage() {
           {/* Platform overrides */}
           <div className="section-label" style={{marginBottom:8}}>
             Platform Overrides
-            <span style={{fontWeight:400,textTransform:"none",letterSpacing:0,color:"var(--text-3)",marginLeft:6}}>— optional</span>
+            <span style={{fontWeight:400,textTransform:"none",letterSpacing:0,color:"var(--text-3)",marginLeft:6}}>— optional, use for platform-specific versions</span>
           </div>
 
           {[
-            { key:"x",  label:"X / Twitter override", badge:"X",  bc:"#888",    bbg:"rgba(255,255,255,0.08)", info:`${xLeft} remaining`, danger:xLeft<20,  ph:"Shorter version for X (max 280 chars)…", val:xOverride,  set:setXOverride,  max:280  },
-            { key:"li", label:"LinkedIn override",     badge:"LI", bc:"#0077B5", bbg:"rgba(0,119,181,0.15)",  info:"3,000 max",           ph:"Extended version with hashtags…",           val:liOverride, set:setLiOverride        },
-            { key:"ig", label:"Instagram override",    badge:"IG", bc:"#E1306C", bbg:"rgba(225,48,108,0.12)", info:"2,200 max",           ph:"Caption with hashtags…",                     val:igOverride, set:setIgOverride, max:2200 },
+            { key:"x",  label:"X / Twitter override", badge:"X",  bc:"#888",    bbg:"rgba(255,255,255,0.08)", info:`${xLeft} remaining`, danger:xLeft<20, ph:"Shorter version for X (max 280)…", val:xOverride,  set:setXOverride,  max:280  },
+            { key:"li", label:"LinkedIn override",     badge:"LI", bc:"#0077B5", bbg:"rgba(0,119,181,0.15)",  info:"3,000 max",            ph:"Extended version with hashtags…",  val:liOverride, set:setLiOverride        },
+            { key:"ig", label:"Instagram override",    badge:"IG", bc:"#E1306C", bbg:"rgba(225,48,108,0.12)", info:"2,200 max",            ph:"Caption with hashtags…",            val:igOverride, set:setIgOverride, max:2200 },
           ].map(ov => {
             const open = overridesOpen.has(ov.key);
             return (
               <div key={ov.key} style={{marginBottom:4}}>
-                <button
-                  className={`override-header ${open?"open":"closed"}`}
+                <button className={`override-header ${open?"open":"closed"}`}
                   onClick={() => toggleOverride(ov.key)}>
                   <span style={{display:"flex",alignItems:"center",gap:10}}>
                     <span className="plat-badge" style={{background:ov.bbg,color:ov.bc}}>{ov.badge}</span>
@@ -382,7 +489,7 @@ export default function ComposePage() {
                 {open && (
                   <div className="override-body">
                     <textarea className="textarea"
-                      style={{minHeight:80,fontSize:"0.82rem"}}
+                      style={{minHeight:80,fontSize:"0.82rem",borderRadius:"var(--radius-xs)"}}
                       placeholder={ov.ph}
                       value={ov.val}
                       onChange={e => ov.set(e.target.value)}
@@ -400,33 +507,38 @@ export default function ComposePage() {
             Media &amp; Schedule
             {selectedPlats.has("instagram") && (
               <span style={{color:"var(--danger)",fontWeight:400,textTransform:"none",letterSpacing:0,marginLeft:8,fontSize:"0.72rem"}}>
-                * Image required for Instagram
+                * Media URL required for Instagram
               </span>
             )}
           </div>
           <div style={{display:"flex",gap:10,flexWrap:"wrap",marginBottom:16}}>
             <input type="url" className="input"
-              style={{flex:1,minWidth:120,borderColor:igNeedsImage?"var(--gold)":"var(--border)"}}
-              placeholder="Media URL — required for Instagram (Google Drive / Dropbox share link)…"
-              value={mediaUrl} onChange={e => setMediaUrl(e.target.value)}/>
+              style={{flex:1,minWidth:180,borderColor:igNeedsImage?"var(--gold)":"var(--border)"}}
+              placeholder="Media URL — image or video (required for Instagram)"
+              value={mediaUrl}
+              onChange={e => setMediaUrl(e.target.value)}/>
             <input type="datetime-local" className="input"
-              style={{flex:1,minWidth:160,colorScheme:"dark"}}
-              value={scheduledAt} onChange={e => setScheduledAt(e.target.value)}/>
+              style={{flex:"0 0 220px",colorScheme:"dark"}}
+              value={scheduledAt}
+              onChange={e => setScheduledAt(e.target.value)}/>
           </div>
 
-          {/* CTA buttons */}
+          {/* Action buttons */}
           <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
             <button className="btn btn-secondary" disabled={submitting} onClick={saveDraft}>
               <SaveIco/> Save Draft
             </button>
             <button className="btn btn-secondary" disabled={submitting} onClick={() => {
               if (!content.trim()) { toast("Write content first","error"); return; }
-              if (!scheduledAt) setScheduledAt(new Date(Date.now()+3600000).toISOString().slice(0,16));
+              if (!scheduledAt) {
+                const oneHour = new Date(Date.now()+3600000).toISOString().slice(0,16);
+                setScheduledAt(oneHour);
+              }
               setScheduleModal(true);
             }}>
               <CalIco/> Schedule
             </button>
-            <button className="btn btn-primary" style={{flex:1}} disabled={submitting || postStatus === "publishing"}
+            <button className="btn btn-primary" style={{flex:1}} disabled={submitting||postStatus==="publishing"}
               onClick={publishNow}>
               {submitting ? <span className="spinner"/> : <SendIco/>}
               {postStatus === "publishing" ? "Publishing…" : "Publish Now"}
@@ -446,9 +558,7 @@ export default function ComposePage() {
                 <button key={p} className={`prev-tab${activePreview===p?" active":""}`}
                   onClick={() => setActivePreview(p)}>
                   {PLATFORM_META[p].short}
-                  {p === "instagram" && igNeedsImage && (
-                    <span style={{color:"var(--gold)",marginLeft:3}}>!</span>
-                  )}
+                  {p==="instagram"&&igNeedsImage&&<span style={{color:"var(--gold)"}}>!</span>}
                 </button>
               ))}
             </div>
@@ -457,11 +567,11 @@ export default function ComposePage() {
 
             <div style={{marginTop:10,padding:"8px 10px",background:"var(--bg-input)",borderRadius:"var(--radius-sm)",border:"1px solid var(--border)",fontSize:"0.70rem",color:"var(--text-3)",lineHeight:1.6}}>
               {{
-                linkedin:  "LinkedIn — up to 3,000 characters. Supports hashtags and articles.",
-                instagram: "Instagram — image or video REQUIRED. Up to 2,200 characters.",
-                facebook:  "Facebook Page — up to 63,000 characters. Links and media supported.",
-                x:         "X (Twitter) — maximum 280 characters.",
-                tiktok:    "TikTok — video required. No URLs in captions.",
+                linkedin:  "LinkedIn — 3,000 char limit. Line breaks and emojis preserved. Rich formatting uses LinkedIn's own editor.",
+                instagram: "Instagram — image/video REQUIRED. 2,200 char limit. Hashtags show as links.",
+                facebook:  "Facebook Page — 63,206 char limit. Links auto-preview.",
+                x:         "X (Twitter) — 280 char limit. Thread if longer.",
+                tiktok:    "TikTok — video required. No clickable URLs in captions.",
               }[activePreview]}
             </div>
           </div>
@@ -471,81 +581,96 @@ export default function ComposePage() {
   );
 }
 
-/* ── Preview Card ── */
+/* ── Preview Card — shows content exactly as it will appear ── */
 function PreviewCard({ platform, text, mediaUrl }: { platform:Platform; text:string; mediaUrl:string }) {
   const empty = !text.trim();
-  const ph:React.CSSProperties  = { fontStyle:"italic", color:"var(--text-3)", fontSize:"0.78rem" };
-  const txt:React.CSSProperties = { fontSize:"0.82rem", lineHeight:1.6, whiteSpace:"pre-wrap", wordBreak:"break-word" };
-  const card:React.CSSProperties= { border:"1px solid var(--border)", borderRadius:"var(--radius-md)", background:"var(--bg-surface)", overflow:"hidden" };
-  const ava = (bg:string):React.CSSProperties => ({ width:40,height:40,borderRadius:"50%",background:bg,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:700,fontSize:"0.82rem",color:"white",flexShrink:0 });
-  const hdr:React.CSSProperties = { display:"flex",alignItems:"center",gap:10,padding:"12px 14px",borderBottom:"1px solid var(--border)" };
-  const nameS:React.CSSProperties={ fontSize:"0.83rem",fontWeight:600,color:"var(--text-1)" };
-  const metaS:React.CSSProperties={ fontSize:"0.68rem",color:"var(--text-3)",marginTop:2 };
-  const acts:React.CSSProperties = { display:"flex",borderTop:"1px solid var(--border)",padding:"4px 14px" };
-  const act:React.CSSProperties  = { flex:1,textAlign:"center",fontSize:"0.72rem",fontWeight:500,color:"var(--text-3)",padding:"6px 0" };
+  // Preserve exact whitespace/line breaks in the preview
+  const textStyle: React.CSSProperties = {
+    fontSize:"0.82rem",lineHeight:1.65,whiteSpace:"pre-wrap",wordBreak:"break-word",
+    fontFamily:"inherit",
+  };
+  const ph: React.CSSProperties = { fontStyle:"italic",color:"var(--text-3)",fontSize:"0.78rem" };
+  const card: React.CSSProperties = {
+    border:"1px solid var(--border)",borderRadius:"var(--radius-md)",
+    background:"var(--bg-surface)",overflow:"hidden",
+  };
+  const ava = (bg:string):React.CSSProperties => ({
+    width:40,height:40,borderRadius:"50%",background:bg,
+    display:"flex",alignItems:"center",justifyContent:"center",
+    fontWeight:700,fontSize:"0.82rem",color:"white",flexShrink:0,
+  });
+  const hdr: React.CSSProperties = {
+    display:"flex",alignItems:"center",gap:10,
+    padding:"12px 14px",borderBottom:"1px solid var(--border)",
+  };
+  const nameS: React.CSSProperties = {fontSize:"0.83rem",fontWeight:600,color:"var(--text-1)"};
+  const metaS: React.CSSProperties = {fontSize:"0.68rem",color:"var(--text-3)",marginTop:2};
+  const acts: React.CSSProperties  = {display:"flex",borderTop:"1px solid var(--border)",padding:"4px 14px"};
+  const act: React.CSSProperties   = {flex:1,textAlign:"center",fontSize:"0.72rem",fontWeight:500,color:"var(--text-3)",padding:"6px 0"};
 
   const mediaBox = mediaUrl
-    ? <div style={{height:100,background:"var(--accent-dim)",borderRadius:"var(--radius-sm)",display:"flex",alignItems:"center",justifyContent:"center",color:"var(--accent)",fontSize:"0.78rem",fontWeight:500,gap:6,marginTop:10}}>
+    ? <div style={{height:90,background:"var(--accent-dim)",borderRadius:"var(--radius-xs)",display:"flex",alignItems:"center",justifyContent:"center",color:"var(--accent)",fontSize:"0.78rem",gap:6,marginTop:10}}>
         <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><rect x="2" y="4" width="16" height="12" rx="2"/><path d="M8 8l6 4-6 4V8z"/></svg>
         Media attached
       </div>
-    : <div style={{height:80,background:"var(--bg-input)",borderRadius:"var(--radius-sm)",border:"1px dashed var(--border)",display:"flex",alignItems:"center",justifyContent:"center",color:"var(--text-3)",fontSize:"0.72rem",marginTop:10}}>
-        No media
+    : <div style={{height:70,background:"var(--bg-input)",borderRadius:"var(--radius-xs)",border:"1px dashed var(--border)",display:"flex",alignItems:"center",justifyContent:"center",color:"var(--text-3)",fontSize:"0.72rem",marginTop:10}}>
+        No media attached
       </div>;
 
   if (platform === "linkedin") return <div style={card}>
-    <div style={hdr}><div style={ava("linear-gradient(135deg,#0077B5,#00A0DC)")}>AC</div>
+    <div style={hdr}><div style={ava("linear-gradient(135deg,#0077B5,#00A0DC)")}>CL</div>
       <div><div style={nameS}>Client Name</div><div style={metaS}>Just now</div></div></div>
-    <div style={{padding:"12px 14px"}}><div style={{...txt,...(empty?ph:{})}}>{empty?"Your post will appear here…":text}</div>{mediaBox}</div>
-    <div style={acts}><span style={{...act,color:"#0077B5"}}>Like</span><span style={act}>Comment</span><span style={act}>Share</span></div>
+    <div style={{padding:"12px 14px"}}><div style={{...textStyle,...(empty?ph:{})}}>{empty?"Your post will appear here…":text}</div>{mediaBox}</div>
+    <div style={acts}><span style={{...act,color:"#0077B5"}}>Like</span><span style={act}>Comment</span><span style={act}>Repost</span></div>
   </div>;
 
   if (platform === "instagram") return <div style={card}>
     <div style={{display:"flex",alignItems:"center",gap:9,padding:"10px 14px"}}>
-      <div style={{width:42,height:42,borderRadius:"50%",background:"linear-gradient(45deg,#F58529,#DD2A7B,#8134AF)",padding:2,display:"flex",alignItems:"center",justifyContent:"center"}}>
-        <div style={{width:"100%",height:"100%",borderRadius:"50%",border:"2px solid var(--bg-surface)",background:"linear-gradient(135deg,#833AB4,#FD1D1D,#F77737)",display:"flex",alignItems:"center",justifyContent:"center",fontWeight:700,fontSize:"0.78rem",color:"white"}}>AC</div>
-      </div>
-      <div><div style={nameS}>clienthandle</div><div style={metaS}>Business · Now</div></div>
+      <div style={{width:38,height:38,borderRadius:"50%",background:"linear-gradient(45deg,#F58529,#DD2A7B,#8134AF)",display:"flex",alignItems:"center",justifyContent:"center",color:"white",fontWeight:700,fontSize:"0.78rem"}}>CL</div>
+      <div><div style={nameS}>clienthandle</div><div style={metaS}>Business</div></div>
     </div>
     {mediaUrl
       ? <div style={{height:160,background:"linear-gradient(135deg,#833AB4,#FD1D1D)",display:"flex",alignItems:"center",justifyContent:"center",color:"white",fontSize:"0.78rem",gap:6}}>
-          <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><rect x="2" y="4" width="16" height="12" rx="2"/><path d="M8 8l6 4-6 4V8z"/></svg>
+          <svg width="14" height="14" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><rect x="2" y="4" width="16" height="12" rx="2"/><path d="M8 8l6 4-6 4V8z"/></svg>
           Image attached
         </div>
-      : <div style={{height:160,background:"var(--bg-input)",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",color:"var(--gold)",gap:4}}>
-          <span style={{fontSize:"1.2rem"}}>⚠</span>
+      : <div style={{height:160,background:"var(--bg-input)",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",color:"var(--gold)",gap:6}}>
+          <span style={{fontSize:"1.5rem"}}>⚠</span>
           <span style={{fontSize:"0.72rem"}}>Image required for Instagram</span>
         </div>
     }
-    <div style={{padding:"10px 14px",fontSize:"0.8rem",lineHeight:1.5}}><strong>clienthandle </strong><span style={empty?ph:{}}>{empty?"Caption…":text}</span></div>
+    <div style={{padding:"10px 14px",fontSize:"0.8rem",lineHeight:1.6}}>
+      <strong>clienthandle </strong>
+      <span style={{...textStyle,...(empty?ph:{})}}>{empty?"Caption…":text}</span>
+    </div>
   </div>;
 
   if (platform === "x") return <div style={card}>
     <div style={{...hdr,borderBottom:"none"}}>
-      <div style={ava("linear-gradient(135deg,#333,#555)")}>AC</div>
+      <div style={ava("linear-gradient(135deg,#222,#444)")}>CL</div>
       <div><div style={{...nameS,display:"flex",alignItems:"center",gap:4}}>Client Name <span style={{color:"var(--accent)",fontSize:"0.75rem"}}>✓</span></div><div style={metaS}>@clienthandle · now</div></div>
     </div>
     <div style={{padding:"4px 14px 8px"}}>
-      <div style={{...txt,fontSize:"0.88rem",...(empty?ph:{})}}>{empty?"Tweet (max 280 chars)…":text.substring(0,280)}</div>
-      <div style={{fontSize:"0.68rem",color:"var(--text-3)",marginTop:6}}>{280-(empty?0:text.length)} remaining</div>
+      <div style={{...textStyle,fontSize:"0.88rem",...(empty?ph:{})}}>{empty?"Tweet…":text.substring(0,280)}</div>
+      {!empty && <div style={{fontSize:"0.68rem",color:text.length>280?"var(--danger)":"var(--text-3)",marginTop:4}}>{280-text.length} chars remaining</div>}
     </div>
     <div style={acts}><span style={act}>Reply</span><span style={act}>Repost</span><span style={act}>Like</span></div>
   </div>;
 
   if (platform === "facebook") return <div style={card}>
-    <div style={hdr}><div style={ava("linear-gradient(135deg,#1877F2,#42A5F5)")}>AC</div>
+    <div style={hdr}><div style={ava("linear-gradient(135deg,#1877F2,#42A5F5)")}>CL</div>
       <div><div style={nameS}>Client Page</div><div style={metaS}>Just now · 🌍</div></div></div>
-    <div style={{padding:"12px 14px"}}><div style={{...txt,...(empty?ph:{})}}>{empty?"Facebook post…":text}</div>{mediaBox}</div>
+    <div style={{padding:"12px 14px"}}><div style={{...textStyle,...(empty?ph:{})}}>{empty?"Facebook post…":text}</div>{mediaBox}</div>
     <div style={acts}><span style={{...act,color:"#1877F2"}}>Like</span><span style={act}>Comment</span><span style={act}>Share</span></div>
   </div>;
 
   return <div style={card}>
-    <div style={{height:240,background:"linear-gradient(160deg,#0A0A0A 60%,#1A0A2A)",display:"flex",alignItems:"center",justifyContent:"center",position:"relative"}}>
-      <svg width="36" height="36" viewBox="0 0 20 20" fill="none" stroke="rgba(255,255,255,0.2)" strokeWidth="1.2" strokeLinecap="round"><polygon points="5 3 19 10 5 17 5 3"/></svg>
-      <div style={{position:"absolute",bottom:12,left:12,right:50}}>
-        <div style={{fontSize:"0.78rem",fontWeight:600,color:"rgba(255,255,255,0.9)",marginBottom:5}}>@clienthandle</div>
-        <div style={{fontSize:"0.72rem",color:empty?"rgba(255,255,255,0.4)":"rgba(255,255,255,0.8)",lineHeight:1.5,fontStyle:empty?"italic":"normal"}}>
-          {empty?"Caption (no URLs)…":text.substring(0,150)}
+    <div style={{height:220,background:"#111",display:"flex",alignItems:"center",justifyContent:"center",position:"relative"}}>
+      <svg width="40" height="40" viewBox="0 0 20 20" fill="none" stroke="rgba(255,255,255,0.15)" strokeWidth="1" strokeLinecap="round"><polygon points="5 3 19 10 5 17 5 3"/></svg>
+      <div style={{position:"absolute",bottom:12,left:12,right:48}}>
+        <div style={{fontSize:"0.78rem",fontWeight:600,color:"rgba(255,255,255,0.9)",marginBottom:4}}>@clienthandle</div>
+        <div style={{fontSize:"0.72rem",color:empty?"rgba(255,255,255,0.35)":"rgba(255,255,255,0.8)",lineHeight:1.5,fontStyle:empty?"italic":"normal"}}>
+          {empty?"Caption (no URLs)…":text.substring(0,120)}
         </div>
       </div>
     </div>

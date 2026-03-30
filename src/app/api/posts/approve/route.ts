@@ -8,19 +8,28 @@ export async function POST(req: NextRequest) {
   if (!session) return NextResponse.json({ ok:false, error:"Unauthorised" }, { status:401 });
 
   try {
-    const { postId, rowIndex, status, note } = await req.json();
+    const { postId, rowIndex, status, note, content } = await req.json();
 
     if (!postId || !rowIndex || !status) {
-      return NextResponse.json({ ok:false, error:"Missing required fields" }, { status:400 });
+      return NextResponse.json({ ok:false, error:"Missing required fields: postId, rowIndex, status" }, { status:400 });
     }
 
     const token = (session as any).accessToken as string;
 
-    await updatePostRow(token, rowIndex, { status });
+    // Build the update — always update status, optionally update content
+    const updates: Parameters<typeof updatePostRow>[2] = { status };
+    if (content !== undefined && content !== null && content.trim()) {
+      updates.content = content;
+    }
+    if (note) {
+      updates.note = note;
+    }
+
+    await updatePostRow(token, rowIndex, updates);
 
     await appendLog(
       token, "client_action", postId, status,
-      note ? `Client note: ${note}` : ""
+      [note && `Note: ${note}`, content && `Content updated`].filter(Boolean).join(" | ")
     );
 
     return NextResponse.json({ ok:true, status });
@@ -29,4 +38,3 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok:false, error:err.message }, { status:500 });
   }
 }
-
