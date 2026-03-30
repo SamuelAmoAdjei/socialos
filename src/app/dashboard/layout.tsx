@@ -125,8 +125,15 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   useEffect(() => {
     fetch("/api/clients").then(r=>r.json()).then(res => {
       if (res.ok && Array.isArray(res.data) && res.data.length > 0) {
-        setClients(res.data.map((c:any)=>({id:c.id,name:c.name})));
-        setActiveClient(res.data[0].id);
+        const list = res.data.map((c:any)=>({id:c.id,name:c.name}));
+        setClients(list);
+        // Read saved active client or default to first
+        const savedId = localStorage.getItem("sos-active-client-id");
+        const found   = savedId ? list.find((c:any) => c.id === savedId) : null;
+        const chosen  = found ?? list[0];
+        setActiveClient(chosen.id);
+        localStorage.setItem("sos-active-client-id",   chosen.id);
+        localStorage.setItem("sos-active-client-name", chosen.name);
       }
     }).catch(()=>{});
   }, []);
@@ -235,7 +242,13 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
               </div>
             ) : (
               <select className="client-select" value={activeClient}
-                onChange={e => setActiveClient(e.target.value)}>
+                onChange={e => {
+                  const id   = e.target.value;
+                  const name = clients.find(c => c.id === id)?.name ?? id;
+                  setActiveClient(id);
+                  localStorage.setItem("sos-active-client-id",   id);
+                  localStorage.setItem("sos-active-client-name", name);
+                }}>
                 {clients.map(c => (
                   <option key={c.id} value={c.id}>{c.name}</option>
                 ))}

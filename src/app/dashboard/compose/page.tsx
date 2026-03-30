@@ -144,31 +144,51 @@ export default function ComposePage() {
   }
 
   // ── Save draft ────────────────────────────────────────────────────────────
+  // Helper — always use the client NAME as clientId for readability in the Sheet
+  function getClientId(): string {
+    if (typeof window === "undefined") return "client";
+    return (
+      localStorage.getItem("sos-active-client-name") ||
+      localStorage.getItem("sos-active-client-id")   ||
+      "client"
+    );
+  }
+
   async function saveDraft() {
     if (!content.trim()) { toast("Write some content first","error"); return; }
     setSubmitting(true);
     try {
-      const body = {
-        content,
-        liOverride: liOverride || undefined,
-        xOverride:  xOverride  || undefined,
-        igOverride: igOverride || undefined,
-        platforms:  Array.from(selectedPlats),
-        mediaUrl:   mediaUrl.trim() || undefined,
-        scheduledAt: scheduledAt || undefined,
-        status:     "draft",
-        clientId:   session?.user?.email ?? "va",
-      };
-      const res = await fetch("/api/posts", {
-        method:  "POST",
-        headers: { "Content-Type": "application/json" },
-        body:    JSON.stringify(body),
+      const res  = await fetch("/api/posts", {
+        method: "POST", headers: {"Content-Type":"application/json"},
+        body: JSON.stringify({
+          content,
+          liOverride:  liOverride  || undefined,
+          xOverride:   xOverride   || undefined,
+          igOverride:  igOverride  || undefined,
+          platforms:   Array.from(selectedPlats),
+          mediaUrl:    mediaUrl.trim() || undefined,
+          scheduledAt: scheduledAt || undefined,
+          status:      "draft",
+          clientId:    getClientId(),
+        }),
       });
-      const data = await res.json();
+
+      // Guard against non-JSON responses (session expired, server error)
+      const text = await res.text();
+      let data: any = {};
+      try { data = JSON.parse(text); } catch {
+        if (res.status === 401) {
+          toast("✗ Session expired — please sign out and sign back in","error");
+        } else {
+          toast(`✗ Server error ${res.status} — check Vercel logs`,"error");
+        }
+        return;
+      }
+
       if (res.ok && data.ok) {
-        toast(`✓ Draft saved (ID: ${data.data?.id?.slice(-8)})`, "success");
+        toast(`✓ Draft saved to your Google Sheet (${data.data?.id?.slice(-8)})`, "success");
       } else {
-        toast(`✗ Save failed: ${data.error || "Unknown error — check your Google Sheets connection"}`, "error");
+        toast(`✗ Save failed: ${data.error || "Unknown — check GOOGLE_SHEETS_ID and sign in again"}`, "error");
       }
     } catch (e: any) {
       toast(`✗ Network error: ${e.message}`, "error");
@@ -195,7 +215,7 @@ export default function ComposePage() {
         mediaUrl:   mediaUrl.trim() || undefined,
         scheduledAt,
         status:     "approved",
-        clientId:   session?.user?.email ?? "va",
+        clientId:   getClientId(),
       };
       const res  = await fetch("/api/posts", {
         method:  "POST",
@@ -246,7 +266,7 @@ export default function ComposePage() {
           platforms,
           mediaUrl:   mediaUrl.trim() || null,
           scheduledAt: new Date().toISOString(),
-          clientId:   session?.user?.email ?? "va",
+          clientId:   getClientId(),
         }),
       });
       const data = await res.json();

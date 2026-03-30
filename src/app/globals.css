@@ -452,14 +452,16 @@ img,svg { display:block }
   background:var(--bg-hover);
   border-color:var(--border-md);
   color:var(--text-1);
+  transform:translateY(-1px);
 }
 .btn-ghost { background:transparent; color:var(--text-2) }
 .btn-ghost:hover { background:var(--bg-hover); color:var(--text-1) }
 .btn-danger { background:var(--danger-dim); border:1px solid rgba(239,68,68,0.25); color:var(--danger) }
-.btn-danger:hover { background:rgba(239,68,68,0.20) }
+.btn-danger:hover { background:rgba(239,68,68,0.20); border-color:var(--danger); transform:translateY(-1px) }
 .btn-sm  { padding:7px 14px;  font-size:0.78rem }
 .btn-lg  { padding:13px 28px; font-size:0.95rem }
 .btn-full{ width:100% }
+.btn:active:not(:disabled) { transform:translateY(0) !important; }
 
 /* ── FORM INPUTS ───────────────────────────────────────────────────────────── */
 .input,.textarea,.select-input {
