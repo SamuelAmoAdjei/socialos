@@ -70,6 +70,35 @@ export default function ClientPortal() {
 
   const C = T[theme];
 
+  // Time-based greeting
+  function getGreeting(): string {
+    const h = new Date().getHours();
+    if (h >= 5  && h < 12) return "Good morning";
+    if (h >= 12 && h < 17) return "Good afternoon";
+    if (h >= 17 && h < 21) return "Good evening";
+    return "Good night";
+  }
+
+  // Client's registered name (from Clients sheet, not Google account name)
+  const [clientName, setClientName] = useState<string>("");
+  useEffect(() => {
+    if (session?.user?.email) {
+      fetch("/api/clients").then(r=>r.json()).then(res => {
+        if (res.ok && Array.isArray(res.data)) {
+          const match = res.data.find((c:any) =>
+            (c.email ?? "").toLowerCase().trim() === (session.user!.email ?? "").toLowerCase().trim()
+          );
+          if (match?.name) setClientName(match.name);
+        }
+      }).catch(()=>{});
+    }
+  }, [session?.user?.email]);
+
+  // Display name: registered client name > Google first name > "Client"
+  const displayName = clientName
+    ? clientName.split(" ")[0]
+    : (session?.user?.name?.split(" ")[0] ?? "Client");
+
   const [role,        setRole]        = useState<"loading"|"client"|"va"|"none">("loading");
   const [tab,         setTab]         = useState<Tab>("pending");
   const [posts,       setPosts]       = useState<(Post & {rowIndex:number})[]>([]);
@@ -159,13 +188,15 @@ export default function ClientPortal() {
       const res = await fetch("/api/posts/approve",{
         method:"POST", headers:{"Content-Type":"application/json"},
         body: JSON.stringify({
-          postId:editPost.id, rowIndex:editPost.rowIndex,
-          status:"pending",
-          note:`Client edited content to: "${editContent.substring(0,100)}…"`,
+          postId:   editPost.id,
+          rowIndex: editPost.rowIndex,
+          status:   "pending",
+          content:  editContent,           // ← actually saves to column C in Sheet
+          note:     `Client edited: "${editContent.substring(0,80)}…"`,
         }),
       }).then(r=>r.json());
       if (res.ok) {
-        setPosts(p=>p.map(x=>x.id===editPost.id?{...x,content:editContent}:x));
+        setPosts(p=>p.map(x=>x.id===editPost!.id?{...x,content:editContent}:x));
         setEditPost(null);
         showToast("✓ Post updated — still pending your final approval","success");
       } else { showToast(res.error||"Failed to save","error"); }
@@ -293,8 +324,35 @@ export default function ClientPortal() {
         @keyframes toastIn{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}
         @keyframes fadeIn{from{opacity:0}to{opacity:1}}
         * { box-sizing: border-box; }
-        .cl-btn { cursor:pointer; font-family:inherit; border:none; transition:all 0.15s; }
-        .cl-btn:disabled { opacity:0.5; cursor:not-allowed; }
+        .cl-btn {
+          cursor: pointer;
+          font-family: inherit;
+          border: none;
+          transition: all 0.15s ease;
+          outline: none;
+        }
+        .cl-btn:disabled {
+          opacity: 0.5;
+          cursor: not-allowed;
+        }
+        .cl-btn:not(:disabled):hover {
+          opacity: 0.85;
+          transform: translateY(-1px);
+        }
+        .cl-btn:not(:disabled):active {
+          transform: translateY(0px);
+          opacity: 1;
+        }
+        .cl-btn-primary:not(:disabled):hover {
+          box-shadow: 0 4px 16px rgba(0,194,168,0.40);
+          opacity: 1;
+        }
+        .cl-btn-danger:not(:disabled):hover {
+          background: rgba(239,68,68,0.25) !important;
+          border-color: #EF4444 !important;
+          color: #EF4444 !important;
+          opacity: 1;
+        }
         .cl-input:focus { border-color:${ACCENT}!important; box-shadow:0 0 0 3px rgba(0,194,168,0.12); }
         textarea.cl-input { resize:vertical; min-height:100px; }
       `}</style>
@@ -360,7 +418,7 @@ export default function ClientPortal() {
               Social<em style={{color:ACCENT,fontStyle:"normal"}}>OS</em> — Client Portal
             </div>
             <div style={{fontSize:"0.68rem",color:C.text3}}>
-              Welcome, {session?.user?.name?.split(" ")[0] ?? "Client"}
+              {getGreeting()}, {displayName}
             </div>
           </div>
         </div>
