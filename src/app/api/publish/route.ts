@@ -4,49 +4,50 @@ import { authOptions } from "@/lib/auth";
 import { createPost, getSettings, appendLog, updatePostRow, getPosts } from "@/lib/sheets";
 import type { ApiResult, Platform } from "@/types";
 
-/** Derive the app's public URL robustly — works on Vercel and localhost */
 function getBaseUrl(req: NextRequest): string {
-  // 1. Prefer explicit env var
   const envUrl = process.env.NEXTAUTH_URL || process.env.NEXT_PUBLIC_APP_URL;
   if (envUrl && !envUrl.includes("undefined")) return envUrl.replace(/\/$/, "");
-
-  // 2. Derive from request headers (works on Vercel)
-  const host   = req.headers.get("x-forwarded-host") || req.headers.get("host") || "";
-  const proto  = req.headers.get("x-forwarded-proto") || "https";
+  const host  = req.headers.get("x-forwarded-host") || req.headers.get("host") || "";
+  const proto = req.headers.get("x-forwarded-proto") || "https";
   if (host) return `${proto}://${host}`;
-
   return "https://socialosv1.vercel.app";
 }
 
 export async function POST(req: NextRequest) {
   const session = await getServerSession(authOptions);
-  if (!session) return NextResponse.json({ ok:false, error:"Unauthorised" }, { status:401 });
+  if (!session) return NextResponse.json({ ok:false, error:"Unauthorised — please sign in" }, { status:401 });
 
   const token = (session as any).accessToken as string;
+  if (!token)  return NextResponse.json({ ok:false, error:"No access token — sign out and sign back in" }, { status:401 });
 
   try {
-    const body = await req.json();
-    const selectedPlatforms: Platform[] = (body.platforms ?? []).map((p:string) => p.toLowerCase() as Platform);
+    const body              = await req.json();
+    const selectedPlatforms = (body.platforms ?? []).map((p:string) => p.toLowerCase() as Platform);
 
     if (selectedPlatforms.length === 0) {
-      return NextResponse.json<ApiResult>({ ok:false, error:"No platforms selected" }, { status:400 });
+      return NextResponse.json<ApiResult>({ ok:false, error:"Select at least one platform" }, { status:400 });
     }
 
-    // 1. Save post to Sheet with status = "publishing"
+    const content    = body.content    ?? "";
+    const liOverride = body.liOverride || content;
+    const xOverride  = (body.xOverride || content).substring(0, 280);
+    const igOverride = body.igOverride || content;
+
+    // 1. Save post to Sheet
     const id = await createPost(token, {
-      clientId:    body.clientId    ?? "default",
-      content:     body.content     ?? "",
-      liOverride:  body.liOverride,
-      xOverride:   body.xOverride,
-      igOverride:  body.igOverride,
+      clientId:    body.clientId || "client",
+      content,
+      liOverride:  body.liOverride || undefined,
+      xOverride:   body.xOverride  || undefined,
+      igOverride:  body.igOverride || undefined,
       platforms:   selectedPlatforms,
-      mediaUrl:    body.mediaUrl,
+      mediaUrl:    body.mediaUrl   || undefined,
       scheduledAt: body.scheduledAt ?? new Date().toISOString(),
       status:      "publishing",
-      docLink:     body.docLink,
+      docLink:     body.docLink    || undefined,
     });
 
-    // 2. Get webhook URL
+    // 2. Get settings
     const settings   = await getSettings(token);
     const webhookUrl = settings["MAKE_WEBHOOK_URL"] ?? process.env.MAKE_WEBHOOK_URL ?? "";
 
@@ -55,38 +56,45 @@ export async function POST(req: NextRequest) {
       const post  = posts.find(p => p.id === id);
       if (post) await updatePostRow(token, post.rowIndex, { status:"approved" });
       return NextResponse.json<ApiResult>({
-        ok:true,
-        data:{ id, warning:"No Make.com webhook configured. Post saved as approved." },
+        ok:true, data:{ id, warning:"No Make.com webhook. Post saved as approved." },
       });
     }
 
-    // 3. Build platform-specific content — ONLY for selected platforms
-    // Make.com uses this to know which Buffer profiles to post to
+    // 3. Build platform-specific text for Make.com Router branches
+    // IMPORTANT: each key holds the ACTUAL TEXT for that platform — not an object
     const platformContent: Record<string,string> = {};
-    selectedPlatforms.forEach(p => {
+    selectedPlatforms.forEach((p: Platform) => {
       switch(p) {
-        case "linkedin":  platformContent.linkedin  = body.liOverride || body.content; break;
-        case "x":         platformContent.x          = body.xOverride  || (body.content ?? "").substring(0,280); break;
-        case "instagram": platformContent.instagram  = body.igOverride || body.content; break;
-        case "facebook":  platformContent.facebook   = body.content; break;
-        case "tiktok":    platformContent.tiktok     = body.content; break;
+        case "linkedin":  platformContent.linkedin  = liOverride; break;
+        case "x":         platformContent.x          = xOverride;  break;
+        case "instagram": platformContent.instagram  = igOverride; break;
+        case "facebook":  platformContent.facebook   = content;    break;
+        case "tiktok":    platformContent.tiktok     = content;    break;
       }
     });
 
-    const baseUrl      = getBaseUrl(req);
-    const callbackUrl  = `${baseUrl}/api/publish/callback`;
+    const baseUrl     = getBaseUrl(req);
+    const callbackUrl = `${baseUrl}/api/publish/callback`;
 
     const payload = {
       post_id:          id,
-      content:          body.content ?? "",
-      platform_content: platformContent,            // Only selected platforms
-      platforms:        selectedPlatforms,           // Array Make.com uses to filter Buffer profiles
+      // ── Simple text fields for Make.com ──
+      // In Make.com Buffer module: use {{1.text}} for the selected platform's content
+      // OR use {{1.platform_content.linkedin}}, {{1.platform_content.facebook}}, etc.
+      text:             content,                  // Fallback: use this if not using Router
+      linkedin_text:    liOverride,               // For LinkedIn branch
+      instagram_text:   igOverride,               // For Instagram branch
+      facebook_text:    content,                  // For Facebook branch
+      x_text:           xOverride,                // For X branch
+
+      // Full object for Router-based setups
+      platform_content: platformContent,
+      platforms:        selectedPlatforms,
       media_url:        body.mediaUrl || null,
       callback_url:     callbackUrl,
-      access_token:     token,                       // For callback to write back to Sheet
+      access_token:     token,                    // Make.com passes this back to callback
     };
 
-    // 4. Fire webhook
     const makeRes = await fetch(webhookUrl, {
       method:  "POST",
       headers: { "Content-Type":"application/json" },
@@ -100,7 +108,7 @@ export async function POST(req: NextRequest) {
       if (post) await updatePostRow(token, post.rowIndex, { status:"failed", errorMsg:errText.substring(0,200) });
       await appendLog(token, "publish", id, "webhook_failed", errText);
       return NextResponse.json<ApiResult>({
-        ok:false, error:`Make.com error ${makeRes.status}: ${errText.substring(0,200)}`
+        ok:false, error:`Make.com ${makeRes.status}: ${errText.substring(0,200)}`
       }, { status:502 });
     }
 
