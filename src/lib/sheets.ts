@@ -141,20 +141,37 @@ export async function updatePostRow(
     publishedAt:     string;
     errorMsg:        string;
     note:            string;
+    platforms:       Platform[];
+    mediaUrl:        string;
+    liOverride:      string;
+    xOverride:       string;
+    igOverride:      string;
   }>
 ) {
   const api     = shts(accessToken);
   const tabName = await resolveTab(accessToken, "Posts");
   const colMap: Record<string,string> = {
     status:"J", platformPostIds:"K", publishedAt:"L", errorMsg:"M", scheduledAt:"I",
-    content:"C",  // column C = content
-    note:"N",     // column N = docLink/notes field
+    content:"C",
+    note:"N",
+    platforms:"G",
+    mediaUrl: "H",
+    liOverride: "D",
+    xOverride: "E",
+    igOverride: "F",
   };
   await Promise.all(
     Object.entries(updates).map(([key, val]) => {
       const col = colMap[key];
       if (!col) return Promise.resolve();
-      const value = typeof val === "object" ? JSON.stringify(val) : String(val ?? "");
+      let value: string;
+      if (key === "platforms" && Array.isArray(val)) {
+        value = val.join(",");
+      } else if (typeof val === "object" && val !== null) {
+        value = JSON.stringify(val);
+      } else {
+        value = String(val ?? "");
+      }
       return api.spreadsheets.values.update({
         spreadsheetId:    SHEET_ID,
         range:            `${tabName}!${col}${rowIndex}`,
@@ -163,6 +180,55 @@ export async function updatePostRow(
       });
     })
   );
+}
+
+export type DraftTopicRow = {
+  rowIndex: number;
+  docLink: string;
+  title: string;
+  platforms: string;
+  targetDate: string;
+  stage: string;
+  notes: string;
+};
+
+/** Client-submitted topics and ideas in the Drafts tab (best-effort). */
+export async function getDraftTopics(accessToken: string): Promise<DraftTopicRow[]> {
+  const api = shts(accessToken);
+  const rng = await range(accessToken, "Drafts", "A2:F");
+  const res = await api.spreadsheets.values.get({ spreadsheetId: SHEET_ID, range: rng });
+  return (res.data.values ?? []).map((row, i) => ({
+    rowIndex: i + 2,
+    docLink:  String(row[0] ?? ""),
+    title:    String(row[1] ?? ""),
+    platforms: String(row[2] ?? ""),
+    targetDate: String(row[3] ?? ""),
+    stage:    String(row[4] ?? ""),
+    notes:    String(row[5] ?? ""),
+  }));
+}
+
+function normEmail(s: string) {
+  return (s ?? "").toLowerCase().trim();
+}
+
+export async function updateClientApprovalRequired(
+  accessToken: string,
+  clientEmail: string,
+  approvalRequired: boolean
+): Promise<void> {
+  const clients = await getClients(accessToken);
+  const idx = clients.findIndex((c) => normEmail(c.email) === normEmail(clientEmail));
+  if (idx === -1) throw new Error("Client record not found for this email");
+  const rowIndex = idx + 2;
+  const api = shts(accessToken);
+  const tabName = await resolveTab(accessToken, "Clients");
+  await api.spreadsheets.values.update({
+    spreadsheetId:    SHEET_ID,
+    range:            `${tabName}!G${rowIndex}`,
+    valueInputOption: "USER_ENTERED",
+    requestBody:      { values: [[approvalRequired ? "TRUE" : "FALSE"]] },
+  });
 }
 
 // ── CLIENTS ───────────────────────────────────────────────────────────────────

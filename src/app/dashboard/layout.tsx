@@ -11,6 +11,7 @@ const NAV = [
   ]},
   { group:"Publishing", items:[
     { label:"Schedule",  href:"/dashboard/schedule",  Icon:CalIco,  badge:true },
+    { label:"Topics",    href:"/dashboard/topics",     Icon:TopicIco },
     { label:"Analytics", href:"/dashboard/analytics", Icon:ChartIco },
   ]},
   { group:"Management", items:[
@@ -23,6 +24,7 @@ const PAGE_TITLES: Record<string,string> = {
   "/dashboard":           "Dashboard",
   "/dashboard/compose":   "Compose",
   "/dashboard/schedule":  "Schedule",
+  "/dashboard/topics":    "Topics",
   "/dashboard/analytics": "Analytics",
   "/dashboard/clients":   "Clients",
   "/dashboard/settings":  "Settings",
@@ -356,6 +358,7 @@ function GridIco({active}:{active?:boolean})  { return <svg {...ico} style={{col
 function EditIco({active}:{active?:boolean})  { return <svg {...ico} style={{color:active?"var(--accent)":"currentColor"}}><path d="M14 2l4 4-10 10H4v-4L14 2z"/><path d="M12 4l4 4"/></svg>; }
 function CalIco({active}:{active?:boolean})   { return <svg {...ico} style={{color:active?"var(--accent)":"currentColor"}}><rect x="2" y="4" width="16" height="14" rx="2"/><path d="M14 2v4M6 2v4M2 8h16"/></svg>; }
 function ChartIco({active}:{active?:boolean})  { return <svg {...ico} style={{color:active?"var(--accent)":"currentColor"}}><path d="M2 14l4-5 4 3 4-6 4 2"/><path d="M2 18h16"/></svg>; }
+function TopicIco({active}:{active?:boolean})  { return <svg {...ico} style={{color:active?"var(--accent)":"currentColor"}}><path d="M10 3v4M7 8h6M6 17h8l-1-7H7l-1 7z"/></svg>; }
 function UsersIco({active}:{active?:boolean})  { return <svg {...ico} style={{color:active?"var(--accent)":"currentColor"}}><circle cx="8" cy="6" r="3"/><path d="M2 18c0-4 2.7-6 6-6s6 2 6 6"/><path d="M14 8a3 3 0 010 5M17 18c0-2.5-1-4-3-5"/></svg>; }
 function CogIco({active}:{active?:boolean})   { return <svg {...ico} style={{color:active?"var(--accent)":"currentColor"}}><circle cx="10" cy="10" r="3"/><path d="M10 2v2M10 16v2M2 10h2M16 10h2M4.2 4.2l1.4 1.4M14.4 14.4l1.4 1.4M4.2 15.8l1.4-1.4M14.4 5.6l1.4-1.4"/></svg>; }
 function BellIco() { return <svg {...ico}><path d="M10 2a6 6 0 00-6 6v3l-1.5 2.5h15L16 11V8a6 6 0 00-6-6z"/><path d="M8 16a2 2 0 004 0"/></svg>; }

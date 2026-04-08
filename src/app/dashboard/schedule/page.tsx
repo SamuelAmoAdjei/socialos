@@ -4,6 +4,9 @@ import { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { PLATFORM_META, type Platform, type Post, type PostStatus } from "@/types";
 
+const ALL_PLATFORMS: Platform[] = ["linkedin","instagram","facebook","x","tiktok"];
+const NON_EDITABLE_STATUS = new Set<PostStatus>(["published", "partial", "publishing"]);
+
 const FILTERS: { label:string; value:PostStatus|"all" }[] = [
   { label:"All Posts",  value:"all"       },
   { label:"Scheduled",  value:"scheduled" },
@@ -31,6 +34,16 @@ export default function SchedulePage() {
   const [timeRange, setTimeRange] = useState<"all"|"week"|"month"|"year">("all");
   const [platformFilter, setPlatformFilter] = useState<"all"|Platform>("all");
 
+  const [editMode, setEditMode] = useState(false);
+  const [savingEdit, setSavingEdit] = useState(false);
+  const [editContent, setEditContent] = useState("");
+  const [editScheduledAt, setEditScheduledAt] = useState("");
+  const [editMediaUrl, setEditMediaUrl] = useState("");
+  const [editLi, setEditLi] = useState("");
+  const [editX, setEditX] = useState("");
+  const [editIg, setEditIg] = useState("");
+  const [editPlats, setEditPlats] = useState<Set<Platform>>(new Set());
+
   const load = useCallback(() => {
     fetch("/api/posts").then(r=>r.json())
       .then(res=>{ if(res.ok) setPosts(res.data); })
@@ -42,6 +55,18 @@ export default function SchedulePage() {
     const id = setInterval(load, 20_000);
     return () => clearInterval(id);
   }, [load]);
+
+  useEffect(() => {
+    if (!selected) return;
+    setEditContent(selected.content);
+    setEditScheduledAt(selected.scheduledAt ? selected.scheduledAt.slice(0, 16) : "");
+    setEditMediaUrl(selected.mediaUrl || "");
+    setEditLi(selected.liOverride || "");
+    setEditX(selected.xOverride || "");
+    setEditIg(selected.igOverride || "");
+    setEditPlats(new Set<Platform>(selected.platforms));
+    setEditMode(false);
+  }, [selected]);
 
   function showToast(msg:string, ok:boolean) {
     setToast({msg,ok});
@@ -79,6 +104,87 @@ export default function SchedulePage() {
     if (timeRange === "month") return diffMs <= 31 * oneDay;
     return diffMs <= 365 * oneDay;
   };
+
+  const canEditSelected = selected ? !NON_EDITABLE_STATUS.has(selected.status) : false;
+
+  async function saveEdits() {
+    if (!selected || !canEditSelected) return;
+    if (!editContent.trim()) {
+      showToast("Content cannot be empty", false);
+      return;
+    }
+    if (editPlats.size === 0) {
+      showToast("Select at least one platform", false);
+      return;
+    }
+    setSavingEdit(true);
+    try {
+      const body: Record<string, unknown> = {
+        rowIndex: selected.rowIndex,
+        postId: selected.id,
+        content: editContent,
+        platforms: Array.from(editPlats),
+        mediaUrl: editMediaUrl.trim() || "",
+        scheduledAt: editScheduledAt ? new Date(editScheduledAt).toISOString() : "",
+        liOverride: editLi.trim() || undefined,
+        xOverride: editX.trim() || undefined,
+        igOverride: editIg.trim() || undefined,
+      };
+      const res = await fetch("/api/posts", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      }).then((r) => r.json());
+      if (res.ok) {
+        const nextPlats = Array.from(editPlats);
+        setPosts((p) =>
+          p.map((x) =>
+            x.id === selected.id
+              ? {
+                  ...x,
+                  content: editContent,
+                  scheduledAt: body.scheduledAt as string,
+                  mediaUrl: editMediaUrl.trim(),
+                  liOverride: editLi,
+                  xOverride: editX,
+                  igOverride: editIg,
+                  platforms: nextPlats,
+                }
+              : x
+          )
+        );
+        setSelected((s) =>
+          s && s.id === selected.id
+            ? {
+                ...s,
+                content: editContent,
+                scheduledAt: (body.scheduledAt as string) || s.scheduledAt,
+                mediaUrl: editMediaUrl.trim(),
+                liOverride: editLi,
+                xOverride: editX,
+                igOverride: editIg,
+                platforms: nextPlats,
+              }
+            : s
+        );
+        showToast("Post updated", true);
+        setEditMode(false);
+      } else {
+        showToast(res.error || "Save failed", false);
+      }
+    } finally {
+      setSavingEdit(false);
+    }
+  }
+
+  function toggleEditPlat(p: Platform) {
+    setEditPlats((prev) => {
+      const n = new Set(prev);
+      if (n.has(p)) n.delete(p);
+      else n.add(p);
+      return n;
+    });
+  }
 
   const filtered = posts
     .filter((p) => (filter === "all" ? true : p.status === filter))
@@ -264,18 +370,18 @@ export default function SchedulePage() {
         ))}
       </div>
 
-      {/* Detail modal */}
+      {/* Detail / preview / edit modal */}
       {selected && (
         <div className="modal-backdrop" onClick={()=>setSelected(null)}>
-          <div className="modal" onClick={e=>e.stopPropagation()}>
+          <div className="modal" style={{maxWidth:560,width:"96%"}} onClick={e=>e.stopPropagation()}>
             <div className="modal-head">
-              <span className="modal-title">Post Details</span>
+              <span className="modal-title">Post preview</span>
               <button style={{background:"none",border:"none",cursor:"pointer",color:"var(--text-3)",fontSize:"1.1rem"}}
                 onClick={()=>setSelected(null)}>✕</button>
             </div>
             <div className="modal-body">
               <div style={{display:"flex",gap:8,marginBottom:14,alignItems:"center",flexWrap:"wrap"}}>
-                {selected.platforms.map(p=>(
+                {(editMode ? Array.from(editPlats) : selected.platforms).map(p=>(
                   <div key={p} style={{
                     width:28,height:28,borderRadius:8,
                     display:"flex",alignItems:"center",justifyContent:"center",
@@ -290,13 +396,67 @@ export default function SchedulePage() {
                   style={{marginLeft:"auto"}}>{selected.status}</span>
               </div>
 
-              <div style={{
-                padding:"12px 14px",background:"var(--bg-input)",
-                borderRadius:"var(--radius-sm)",border:"1px solid var(--border)",
-                fontSize:"0.88rem",lineHeight:1.75,color:"var(--text-1)",marginBottom:16,
-              }}>
-                {selected.content}
-              </div>
+              {!editMode && (
+                <div style={{
+                  padding:"12px 14px",background:"var(--bg-input)",
+                  borderRadius:"var(--radius-sm)",border:"1px solid var(--border)",
+                  fontSize:"0.88rem",lineHeight:1.75,color:"var(--text-1)",marginBottom:16,
+                  maxHeight:220,overflowY:"auto",whiteSpace:"pre-wrap",wordBreak:"break-word",
+                }}>
+                  {selected.content}
+                </div>
+              )}
+
+              {editMode && canEditSelected && (
+                <div style={{display:"flex",flexDirection:"column",gap:12,marginBottom:16}}>
+                  <div>
+                    <label className="form-label">Content</label>
+                    <textarea className="textarea" style={{minHeight:120}} value={editContent}
+                      onChange={e=>setEditContent(e.target.value)} />
+                  </div>
+                  <div>
+                    <label className="form-label">Platforms</label>
+                    <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+                      {ALL_PLATFORMS.map(p=>{
+                        const on = editPlats.has(p);
+                        const m = PLATFORM_META[p];
+                        return (
+                          <button key={p} type="button" className={`plat-tab${on?" selected":""}`}
+                            onClick={()=>toggleEditPlat(p)}
+                            style={on ? {background:m.bg,borderColor:m.color,color:m.color} : {}}>
+                            {on && "✓ "}{m.label}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                  <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+                    <div>
+                      <label className="form-label">Schedule (local)</label>
+                      <input type="datetime-local" className="input" value={editScheduledAt}
+                        onChange={e=>setEditScheduledAt(e.target.value)} style={{colorScheme:"dark"}} />
+                    </div>
+                    <div>
+                      <label className="form-label">Media URL</label>
+                      <input type="url" className="input" value={editMediaUrl} onChange={e=>setEditMediaUrl(e.target.value)} />
+                    </div>
+                  </div>
+                  <div>
+                    <label className="form-label">Overrides (optional)</label>
+                    <div style={{display:"grid",gap:8}}>
+                      <input className="input" placeholder="LinkedIn" value={editLi} onChange={e=>setEditLi(e.target.value)} />
+                      <input className="input" placeholder="X / Twitter" value={editX} onChange={e=>setEditX(e.target.value)} />
+                      <input className="input" placeholder="Instagram" value={editIg} onChange={e=>setEditIg(e.target.value)} />
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {!canEditSelected && (
+                <p style={{fontSize:"0.78rem",color:"var(--text-3)",marginBottom:12}}>
+                  Published and in-flight posts cannot be edited here.
+                </p>
+              )}
 
               <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
                 {([
@@ -316,13 +476,28 @@ export default function SchedulePage() {
                 ))}
               </div>
             </div>
-            <div className="modal-foot" style={{gap:8}}>
+            <div className="modal-foot" style={{gap:8,flexWrap:"wrap"}}>
               <button className="btn btn-danger btn-sm"
                 disabled={deleting===selected.id}
                 onClick={()=>deletePost(selected)}>
                 <TrashIco/> Delete
               </button>
-              <div style={{flex:1}}/>
+              {canEditSelected && !editMode && (
+                <button className="btn btn-secondary btn-sm" type="button" onClick={()=>setEditMode(true)}>
+                  Edit post
+                </button>
+              )}
+              {canEditSelected && editMode && (
+                <>
+                  <button className="btn btn-secondary btn-sm" type="button" disabled={savingEdit}
+                    onClick={()=>setEditMode(false)}>Cancel edit</button>
+                  <button className="btn btn-primary btn-sm" type="button" disabled={savingEdit}
+                    onClick={saveEdits}>
+                    {savingEdit ? <><span className="spinner" style={{width:12,height:12,marginRight:6}}/>Saving…</> : "Save changes"}
+                  </button>
+                </>
+              )}
+              <div style={{flex:1,minWidth:8}}/>
               <button className="btn btn-secondary" onClick={()=>setSelected(null)}>Close</button>
               <button className="btn btn-primary"
                 onClick={()=>{router.push("/dashboard/compose");setSelected(null);}}>

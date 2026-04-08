@@ -51,7 +51,7 @@ const PLAT_META: Record<string,{label:string;color:string;bg:string}> = {
 
 const ALL_PLATFORMS: Platform[] = ["linkedin","instagram","facebook","x","tiktok"];
 
-type Tab = "pending"|"approved"|"published"|"topics";
+type Tab = "pending"|"approved"|"published"|"topics"|"settings";
 
 export default function ClientPortal() {
   const { data:session, status } = useSession();
@@ -120,6 +120,9 @@ export default function ClientPortal() {
   const [topicMsg,    setTopicMsg]    = useState<{text:string;ok:boolean}|null>(null);
   const [topicUploading, setTopicUploading] = useState(false);
 
+  const [approvalRequired, setApprovalRequired] = useState<boolean | null>(null);
+  const [approvalSaving, setApprovalSaving] = useState(false);
+
   function showToast(msg:string, type:"success"|"error"|"info"="info") {
     setToast({msg,type});
     setTimeout(()=>setToast(null),4000);
@@ -155,6 +158,42 @@ export default function ClientPortal() {
     const id = setInterval(loadPosts, 30_000);
     return () => clearInterval(id);
   }, [loadPosts]);
+
+  useEffect(() => {
+    if (role !== "client") return;
+    fetch("/api/client/me")
+      .then((r) => r.json())
+      .then((res) => {
+        if (res.ok && res.data && typeof res.data.approvalRequired === "boolean") {
+          setApprovalRequired(res.data.approvalRequired);
+        }
+      })
+      .catch(() => {});
+  }, [role]);
+
+  async function setApprovalMode(next: boolean) {
+    if (role !== "client") return;
+    const msg = next
+      ? "Turn approval back on? New VA posts will wait for you to approve before publishing."
+      : "Turn off approval? Your VA will be able to schedule posts without your prior approval in SocialOS.";
+    if (!window.confirm(msg)) return;
+    setApprovalSaving(true);
+    try {
+      const res = await fetch("/api/client/me", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ approvalRequired: next }),
+      }).then((r) => r.json());
+      if (res.ok) {
+        setApprovalRequired(next);
+        showToast(next ? "Approval required is ON" : "Approval required is OFF — VA can post without your sign-off", "success");
+      } else {
+        showToast(res.error || "Could not update — check Sheet permissions for your account", "error");
+      }
+    } finally {
+      setApprovalSaving(false);
+    }
+  }
 
   // Approve
   async function approve(post: Post & {rowIndex:number}) {
@@ -499,18 +538,18 @@ export default function ClientPortal() {
         )}
 
         {/* Tabs */}
-        <div style={{display:"flex",gap:0,marginBottom:24,background:C.card,border:`1px solid ${C.border}`,borderRadius:12,padding:4}}>
-          {(["pending","approved","published","topics"] as Tab[]).map(t=>(
+        <div style={{display:"flex",gap:0,marginBottom:24,background:C.card,border:`1px solid ${C.border}`,borderRadius:12,padding:4,flexWrap:"wrap"}}>
+          {(["pending","approved","published","topics","settings"] as Tab[]).map(t=>(
             <button key={t} className="cl-btn" onClick={()=>setTab(t)}
               style={{
-                flex:1,padding:"9px 6px",borderRadius:9,
+                flex:1,minWidth:90,padding:"9px 6px",borderRadius:9,
                 fontSize:"0.82rem",fontWeight:500,
                 background:tab===t?C.surface:"none",
                 color:tab===t?C.text1:C.text3,
                 boxShadow:tab===t?"0 1px 4px rgba(0,0,0,0.10)":"none",
                 display:"flex",alignItems:"center",justifyContent:"center",gap:6,
               }}>
-              {{pending:"Pending",approved:"Approved",published:"Published",topics:"Submit Topic"}[t]}
+              {{pending:"Pending",approved:"Approved",published:"Published",topics:"Submit Topic",settings:"Settings"}[t]}
               {t==="pending"&&pendingCount>0&&(
                 <span style={{background:ACCENT,color:"#0B0F1A",fontSize:"0.62rem",fontWeight:700,padding:"1px 6px",borderRadius:20}}>
                   {pendingCount}
@@ -596,8 +635,52 @@ export default function ClientPortal() {
           </div>
         )}
 
+        {/* Settings — approval workflow (updates Clients sheet via your Google account) */}
+        {tab==="settings" && (
+          <div style={card}>
+            <h3 style={{fontFamily:"'Sora',system-ui",fontSize:"0.95rem",fontWeight:600,marginBottom:8,color:C.text1}}>
+              Approval workflow
+            </h3>
+            <p style={{fontSize:"0.82rem",color:C.text3,marginBottom:20,lineHeight:1.6}}>
+              This matches the &quot;Require approval&quot; setting your VA sees in Clients. If you turn it off, new
+              scheduled posts from the VA can go live without waiting in your Pending tab (according to SocialOS rules).
+            </p>
+            {approvalRequired === null ? (
+              <p style={{fontSize:"0.82rem",color:C.text3}}>Loading your preferences…</p>
+            ) : (
+              <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:16,flexWrap:"wrap"}}>
+                <div>
+                  <div style={{fontWeight:600,color:C.text1,marginBottom:4}}>
+                    {approvalRequired ? "Approval required" : "Approval not required"}
+                  </div>
+                  <div style={{fontSize:"0.78rem",color:C.text3}}>
+                    Toggle updates your row in the Google Sheet &quot;Clients&quot; tab (column approval_required).
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  className="cl-btn"
+                  disabled={approvalSaving}
+                  onClick={() => setApprovalMode(!approvalRequired)}
+                  style={{
+                    padding:"10px 20px",
+                    borderRadius:10,
+                    fontWeight:600,
+                    fontSize:"0.85rem",
+                    border:`1px solid ${C.border}`,
+                    background: approvalRequired ? C.input : ACCENT,
+                    color: approvalRequired ? C.text1 : "#0B0F1A",
+                  }}
+                >
+                  {approvalSaving ? "Saving…" : approvalRequired ? "Turn off approval" : "Require approval again"}
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+
         {/* Post lists */}
-        {tab !== "topics" && (
+        {tab !== "topics" && tab !== "settings" && (
           postsLoading ? (
             <div style={{display:"flex",justifyContent:"center",padding:56}}>
               <Spinner size={36}/>

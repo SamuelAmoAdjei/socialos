@@ -240,3 +240,44 @@ Option B (paid): Upgrade to Core ($9/month)
 - Check Make.com execution history for errors
 - Check Apps Script Log tab for callback errors
 - Manually update the row status in the sheet if needed
+
+---
+
+## SocialOS UI → Make.com platform rules (critical)
+
+SocialOS sends a JSON array `platforms` (lowercase slugs), for example only `["linkedin"]` or `["facebook","instagram"]`. **Only branches whose filter matches this array should run.** If a branch has no filter, Make will run every module and Instagram/TikTok may fail when no image/video was sent.
+
+### Verify the webhook payload
+1. In Make.com, open Scenario 1 → Webhooks module → right-click **Run this module only** (or use History after a real run).
+2. Confirm you see `platforms` as an **array** of strings (not a single comma-separated string). If structure is wrong, run **Redetermine data structure** and trigger `testWebhook()` or a real publish again.
+
+### Set Router filters (repeat for every branch)
+1. Add **Flow control → Router** immediately after the Webhook.
+2. For **each** route, click the wrench/route settings and **Set filters**.
+3. Add a condition on the webhook bundle’s `body` `platforms` field (wording varies by Make version):
+   - **Preferred:** `platforms` **Contains** the literal string `linkedin` (then `instagram`, `facebook`, `x`, `tiktok` on other routes).
+   - **Alternative:** Text operator: `platforms` **contains (case insensitive)** → `linkedin`.
+4. **Do not** leave a “fallback” route that runs all platforms with no filter unless you intentionally want that.
+5. On each social module route, add **Error handler → Resume** so one failed network does not kill the others.
+
+### Field mapping (must match SocialOS)
+- **Router / modules** should use `platform_content.linkedin`, `platform_content.instagram`, etc., OR the flat fields `linkedin_text`, `instagram_text`, etc., depending on what you mapped in modules. SocialOS sends both `platform_content` object and `linkedin_text`, `instagram_text`, `facebook_text`, `x_text` for Make mapping flexibility.
+- **Media:** `media_url` — required for Instagram photo flow; use a direct HTTPS URL (Drive upload from SocialOS returns a shareable link).
+
+### After changing filters
+1. Save scenario → turn **ON**.
+2. From Compose, select **only LinkedIn** → Publish now → Make history should show **only** the LinkedIn branch executed.
+3. Repeat with Instagram **only** if `media_url` is set, or expect that branch to error (keep Resume handler).
+
+---
+
+## Gmail notifications (pending + published)
+
+SocialOS can email the client when a post is **pending approval** and when a post is **published** (via Next.js + Gmail API), using the VA’s Google account that is signed into the dashboard.
+
+1. In **Google Cloud Console** for the same OAuth project: enable **Gmail API**.
+2. On the **OAuth consent screen**, add scope: `https://www.googleapis.com/auth/gmail.send` (or add the Gmail “Send email on your behalf” scope Gmail shows in the picker).
+3. **Everyone must sign out and sign in again** so the new scope is granted.
+4. Pending emails use the **Clients** row email for the active client, falling back to `CLIENT_EMAIL` in the Settings sheet.
+5. Published emails use the same resolution after Make.com calls `/api/publish/callback` with a valid `access_token`.
+6. If you also use **Apps Script** `sendConfirmation`, you may get duplicate publish emails — use **either** Next.js callback emails **or** Apps Script emails for publish, not both pointing at the same flow.

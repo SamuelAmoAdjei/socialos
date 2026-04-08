@@ -4,8 +4,13 @@
  * Also handles the analytics sync payload (type: "analytics").
  */
 import { NextRequest, NextResponse } from "next/server";
-import { getPostById, updatePostRow, appendLog, appendAnalytics } from "@/lib/sheets";
+import { getPostById, updatePostRow, appendLog, appendAnalytics, getClients, getSettings } from "@/lib/sheets";
+import { sendEmailAsUser } from "@/lib/notify";
 import type { Platform } from "@/types";
+
+function norm(v: string) {
+  return String(v || "").trim().toLowerCase();
+}
 
 // The callback uses a shared secret instead of a user session
 // because Make.com calls it server-to-server.
@@ -88,6 +93,51 @@ export async function POST(req: NextRequest) {
       newStatus,
       JSON.stringify(results)
     );
+
+    if (newStatus === "published" || newStatus === "partial") {
+      try {
+        const clients = await getClients(access_token);
+        const match = clients.find(
+          (c) =>
+            norm(c.id) === norm(post.clientId) ||
+            norm(c.name) === norm(post.clientId) ||
+            norm(c.email) === norm(post.clientId)
+        );
+        const settings = await getSettings(access_token);
+        const clientEmail =
+          (match?.email && match.email.trim()) ||
+          (settings["CLIENT_EMAIL"] || "").trim();
+        const vaEmail = (settings["VA_EMAIL"] || "").trim();
+        const appBase = (process.env.NEXT_PUBLIC_APP_URL || process.env.NEXTAUTH_URL || "").replace(/\/$/, "");
+        const portal = appBase ? `${appBase}/client` : "/client";
+        if (clientEmail) {
+          const subj =
+            newStatus === "published"
+              ? "SocialOS — your post was published"
+              : "SocialOS — your post was partially published";
+          await sendEmailAsUser(
+            access_token,
+            clientEmail,
+            subj,
+            `Status: ${newStatus}\n\n` +
+              `Post ID: ${post_id}\n` +
+              (post.content ? `Content preview: ${post.content.substring(0, 400)}${post.content.length > 400 ? "…" : ""}\n\n` : "") +
+              `Review in portal: ${portal}\n` +
+              (errorMsg ? `\nNote: ${errorMsg}\n` : "")
+          );
+        }
+        if (vaEmail && clientEmail && vaEmail.toLowerCase() !== clientEmail.toLowerCase()) {
+          await sendEmailAsUser(
+            access_token,
+            vaEmail,
+            `SocialOS — publish complete (${newStatus})`,
+            `Post ${post_id} finished as ${newStatus}.\n${errorMsg ? errorMsg + "\n" : ""}`
+          );
+        }
+      } catch {
+        // gmail.send missing or quota — sheet still updated
+      }
+    }
 
     return NextResponse.json({ ok: true, status: newStatus });
 
