@@ -37,6 +37,7 @@ export default function ComposePage() {
   const [scheduleModal, setScheduleModal]  = useState(false);
   const [publishedPostId,setPublishedPostId]= useState<string|null>(null);
   const [postStatus,    setPostStatus]     = useState<string|null>(null);
+  const [uploadingMedia,setUploadingMedia] = useState(false);
 
   // Status polling after Publish Now
   useEffect(() => {
@@ -194,6 +195,26 @@ export default function ComposePage() {
       toast(`✗ Network error: ${e.message}`, "error");
     } finally {
       setSubmitting(false);
+    }
+  }
+
+  async function uploadMediaFile(file: File) {
+    setUploadingMedia(true);
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      const res = await fetch("/api/media/upload", { method: "POST", body: fd });
+      const data = await res.json();
+      if (res.ok && data.ok && data.data?.url) {
+        setMediaUrl(data.data.url);
+        toast(`✓ Uploaded: ${file.name}`, "success");
+      } else {
+        toast(`✗ Upload failed: ${data.error || "Unknown error"}`, "error");
+      }
+    } catch (e: any) {
+      toast(`✗ Upload error: ${e.message}`, "error");
+    } finally {
+      setUploadingMedia(false);
     }
   }
 
@@ -539,13 +560,32 @@ export default function ComposePage() {
           <div style={{display:"flex",gap:10,flexWrap:"wrap",marginBottom:16}}>
             <input type="url" className="input"
               style={{flex:1,minWidth:180,borderColor:igNeedsImage?"var(--gold)":"var(--border)"}}
-              placeholder="Media URL — image or video (required for Instagram)"
+              placeholder="Media URL (or upload a file below)"
               value={mediaUrl}
               onChange={e => setMediaUrl(e.target.value)}/>
             <input type="datetime-local" className="input"
               style={{flex:"0 0 220px",colorScheme:"dark"}}
               value={scheduledAt}
               onChange={e => setScheduledAt(e.target.value)}/>
+          </div>
+          <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:18,flexWrap:"wrap"}}>
+            <label className="btn btn-secondary btn-sm" style={{cursor: uploadingMedia ? "not-allowed" : "pointer", opacity: uploadingMedia ? 0.7 : 1}}>
+              {uploadingMedia ? <><span className="spinner" style={{marginRight:6}}/>Uploading…</> : "Upload image/video"}
+              <input
+                type="file"
+                accept="image/*,video/*"
+                disabled={uploadingMedia}
+                style={{display:"none"}}
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  if (file) uploadMediaFile(file);
+                  e.currentTarget.value = "";
+                }}
+              />
+            </label>
+            <span style={{fontSize:"0.72rem",color:"var(--text-3)"}}>
+              Uploaded files become shareable links automatically.
+            </span>
           </div>
 
           {/* Action buttons */}

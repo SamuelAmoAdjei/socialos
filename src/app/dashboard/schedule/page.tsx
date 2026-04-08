@@ -9,7 +9,7 @@ const FILTERS: { label:string; value:PostStatus|"all" }[] = [
   { label:"Scheduled",  value:"scheduled" },
   { label:"Published",  value:"published" },
   { label:"Drafts",     value:"draft"     },
-  { label:"Pending",    value:"approved"  },
+  { label:"Pending",    value:"pending"   },
   { label:"Failed",     value:"failed"    },
 ];
 
@@ -28,6 +28,8 @@ export default function SchedulePage() {
   const [selected, setSelected] = useState<(Post & {rowIndex:number})|null>(null);
   const [deleting, setDeleting] = useState<string|null>(null);
   const [toast,    setToast]    = useState<{msg:string;ok:boolean}|null>(null);
+  const [timeRange, setTimeRange] = useState<"all"|"week"|"month"|"year">("all");
+  const [platformFilter, setPlatformFilter] = useState<"all"|Platform>("all");
 
   const load = useCallback(() => {
     fetch("/api/posts").then(r=>r.json())
@@ -64,7 +66,29 @@ export default function SchedulePage() {
     } finally { setDeleting(null); }
   }
 
-  const filtered = filter === "all" ? posts : posts.filter(p=>p.status===filter);
+  const inSelectedTimeRange = (post: Post) => {
+    if (timeRange === "all") return true;
+    const source = post.scheduledAt || post.createdAt || post.publishedAt;
+    if (!source) return false;
+    const dt = new Date(source);
+    if (Number.isNaN(dt.getTime())) return false;
+    const now = new Date();
+    const diffMs = now.getTime() - dt.getTime();
+    const oneDay = 24 * 60 * 60 * 1000;
+    if (timeRange === "week") return diffMs <= 7 * oneDay;
+    if (timeRange === "month") return diffMs <= 31 * oneDay;
+    return diffMs <= 365 * oneDay;
+  };
+
+  const filtered = posts
+    .filter((p) => (filter === "all" ? true : p.status === filter))
+    .filter((p) => (platformFilter === "all" ? true : p.platforms.includes(platformFilter)))
+    .filter((p) => inSelectedTimeRange(p))
+    .sort((a, b) => {
+      const aTs = new Date(a.createdAt || a.scheduledAt || a.publishedAt || 0).getTime();
+      const bTs = new Date(b.createdAt || b.scheduledAt || b.publishedAt || 0).getTime();
+      return bTs - aTs;
+    });
 
   return (
     <div style={{position:"relative"}}>
@@ -127,6 +151,31 @@ export default function SchedulePage() {
         })}
       </div>
 
+      <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:16}}>
+        <select
+          className="input"
+          value={timeRange}
+          onChange={(e) => setTimeRange(e.target.value as typeof timeRange)}
+          style={{width: 180}}
+        >
+          <option value="all">All time</option>
+          <option value="week">Last 7 days</option>
+          <option value="month">Last 30 days</option>
+          <option value="year">Last 12 months</option>
+        </select>
+        <select
+          className="input"
+          value={platformFilter}
+          onChange={(e) => setPlatformFilter(e.target.value as "all"|Platform)}
+          style={{width: 200}}
+        >
+          <option value="all">All platforms</option>
+          {Object.keys(PLATFORM_META).map((p) => (
+            <option key={p} value={p}>{PLATFORM_META[p as Platform].label}</option>
+          ))}
+        </select>
+      </div>
+
       {/* Post list */}
       <div className="card" style={{overflow:"hidden"}}>
         {loading && (
@@ -154,15 +203,16 @@ export default function SchedulePage() {
         )}
         {!loading && filtered.map((post,i) => (
           <div key={post.id} style={{
-            display:"flex",alignItems:"flex-start",gap:12,
+            display:"flex",alignItems:"center",gap:12,
             padding:"14px 20px",borderBottom: i<filtered.length-1 ? "1px solid var(--border)" : "none",
             transition:"background var(--t-fast) var(--ease)",cursor:"pointer",
+            minWidth:0,
           }}
           onMouseEnter={e=>(e.currentTarget.style.background="var(--bg-hover)")}
           onMouseLeave={e=>(e.currentTarget.style.background="")}
           onClick={()=>setSelected(post)}>
 
-            <div className="plat-dots" style={{marginTop:2}}>
+            <div className="plat-dots" style={{marginTop:2,flexShrink:0}}>
               {post.platforms.slice(0,3).map(p=>(
                 <div key={p} className="plat-dot"
                   style={{background:PLATFORM_META[p as Platform]?.bg??"var(--bg-input)",color:PLATFORM_META[p as Platform]?.color??"var(--text-3)"}}>
@@ -171,8 +221,19 @@ export default function SchedulePage() {
               ))}
             </div>
 
-            <div className="post-body">
-              <div className="post-preview">{post.content||"(no content)"}</div>
+            <div className="post-body" style={{minWidth:0,flex:1}}>
+              <div
+                className="post-preview"
+                title={post.content || "(no content)"}
+                style={{
+                  whiteSpace:"nowrap",
+                  overflow:"hidden",
+                  textOverflow:"ellipsis",
+                  maxWidth:"100%",
+                }}
+              >
+                {post.content||"(no content)"}
+              </div>
               <div className="post-meta">
                 <span>{post.clientId}</span>
                 {post.scheduledAt && <span>{new Date(post.scheduledAt).toLocaleString()}</span>}
@@ -180,7 +241,7 @@ export default function SchedulePage() {
               </div>
             </div>
 
-            <div style={{display:"flex",alignItems:"center",gap:8,flexShrink:0}}>
+            <div style={{display:"flex",alignItems:"center",gap:8,flexShrink:0,marginLeft:"auto"}}>
               <span className={`pill ${PILL[post.status]??"pill-draft"}`}>{post.status}</span>
               <button
                 onClick={e=>{e.stopPropagation();deletePost(post);}}

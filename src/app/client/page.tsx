@@ -105,6 +105,7 @@ export default function ClientPortal() {
   const [postsLoading,setPostsLoading]= useState(true);
   const [toast,       setToast]       = useState<{msg:string;type:"success"|"error"|"info"}|null>(null);
   const [acting,      setActing]      = useState<string|null>(null);
+  const [refreshing,  setRefreshing]  = useState(false);
 
   // Edit modal
   const [editPost,    setEditPost]    = useState<(Post & {rowIndex:number})|null>(null);
@@ -117,6 +118,7 @@ export default function ClientPortal() {
   const [topicMedia,  setTopicMedia]  = useState("");
   const [topicSaving, setTopicSaving] = useState(false);
   const [topicMsg,    setTopicMsg]    = useState<{text:string;ok:boolean}|null>(null);
+  const [topicUploading, setTopicUploading] = useState(false);
 
   function showToast(msg:string, type:"success"|"error"|"info"="info") {
     setToast({msg,type});
@@ -134,11 +136,18 @@ export default function ClientPortal() {
   }, [status]);
 
   // Load posts
-  const loadPosts = useCallback(() => {
+  const loadPosts = useCallback((withIndicator = false) => {
     if (role !== "client") return;
+    if (withIndicator) setRefreshing(true);
     fetch("/api/posts").then(r=>r.json())
       .then(res=>{ if(res.ok) setPosts(res.data); })
-      .finally(()=>setPostsLoading(false));
+      .finally(()=>{
+        setPostsLoading(false);
+        if (withIndicator) {
+          setRefreshing(false);
+          showToast("Refreshed","info");
+        }
+      });
   }, [role]);
 
   useEffect(() => {
@@ -209,23 +218,41 @@ export default function ClientPortal() {
     if (topicPlats.size===0){ setTopicMsg({text:"Select at least one platform",ok:false}); return; }
     setTopicSaving(true); setTopicMsg(null);
     try {
-      const res = await fetch("/api/posts",{
+      const res = await fetch("/api/topics",{
         method:"POST", headers:{"Content-Type":"application/json"},
         body: JSON.stringify({
-          content:     `[TOPIC IDEA] ${topicText}`,
+          content:     topicText,
           platforms:   Array.from(topicPlats),
           mediaUrl:    topicMedia.trim()||undefined,
-          status:      "draft",
           clientId:    session?.user?.email ?? "client",
-          scheduledAt: "",
         }),
       }).then(r=>r.json());
       if (res.ok) {
         setTopicText(""); setTopicMedia("");
-        setTopicMsg({text:"✓ Topic submitted to your VA — they will create the post",ok:true});
+        setTopicMsg({text:"✓ Topic submitted to your VA — saved successfully",ok:true});
         showToast("Topic sent to your VA","success");
       } else { setTopicMsg({text:res.error||"Submit failed",ok:false}); }
     } finally { setTopicSaving(false); }
+  }
+
+  async function uploadTopicMedia(file: File) {
+    setTopicUploading(true);
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      const res = await fetch("/api/media/upload", { method: "POST", body: fd });
+      const data = await res.json();
+      if (res.ok && data.ok && data.data?.url) {
+        setTopicMedia(data.data.url);
+        showToast("Media uploaded", "success");
+      } else {
+        showToast(data.error || "Upload failed", "error");
+      }
+    } catch (e: any) {
+      showToast(e.message || "Upload failed", "error");
+    } finally {
+      setTopicUploading(false);
+    }
   }
 
   // Filtered posts per tab
@@ -338,6 +365,8 @@ export default function ClientPortal() {
         .cl-btn:not(:disabled):hover {
           opacity: 0.85;
           transform: translateY(-1px);
+          border-color: ${ACCENT} !important;
+          box-shadow: 0 0 0 2px rgba(0,194,168,0.10);
         }
         .cl-btn:not(:disabled):active {
           transform: translateY(0px);
@@ -428,10 +457,10 @@ export default function ClientPortal() {
             style={{width:36,height:36,borderRadius:8,background:C.input,border:`1px solid ${C.border}`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:16,color:C.text2}}>
             {theme==="dark"?"☀️":"🌙"}
           </button>
-          <button className="cl-btn" onClick={loadPosts}
+          <button className="cl-btn" onClick={()=>loadPosts(true)}
             style={{padding:"7px 14px",borderRadius:8,background:C.input,border:`1px solid ${C.border}`,color:C.text2,fontSize:"0.82rem",display:"flex",alignItems:"center",gap:6}}>
-            <svg width="13" height="13" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M4 12a6 6 0 1 0 1-4M4 4v4h4"/></svg>
-            Refresh
+            {refreshing ? <Spinner size={12}/> : <svg width="13" height="13" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M4 12a6 6 0 1 0 1-4M4 4v4h4"/></svg>}
+            {refreshing ? "Refreshing..." : "Refresh"}
           </button>
           <button className="cl-btn" onClick={()=>signOut({callbackUrl:"/client"})}
             style={{padding:"7px 14px",borderRadius:8,background:C.input,border:`1px solid ${C.border}`,color:C.text2,fontSize:"0.82rem"}}>
@@ -534,6 +563,24 @@ export default function ClientPortal() {
               <input type="url" className="cl-input"
                 style={{...inp}} placeholder="Google Drive / Dropbox share link to an image or video"
                 value={topicMedia} onChange={e=>setTopicMedia(e.target.value)}/>
+              <div style={{display:"flex",alignItems:"center",gap:8,marginTop:8}}>
+                <label className="cl-btn cl-btn-primary"
+                  style={{padding:"7px 12px",borderRadius:8,background:C.input,border:`1px solid ${C.border}`,color:C.text2,fontSize:"0.78rem"}}>
+                  {topicUploading ? "Uploading..." : "Upload media"}
+                  <input
+                    type="file"
+                    accept="image/*,video/*"
+                    disabled={topicUploading}
+                    style={{display:"none"}}
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      if (file) uploadTopicMedia(file);
+                      e.currentTarget.value = "";
+                    }}
+                  />
+                </label>
+                <span style={{fontSize:"0.72rem",color:C.text3}}>Auto-generates shareable link</span>
+              </div>
             </div>
 
             {topicMsg && (

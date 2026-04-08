@@ -172,6 +172,28 @@ function doPost(e) {
         .setMimeType(ContentService.MimeType.JSON);
     }
 
+    // ── Topic submissions from client portal ─────────────────────────────────
+    if (body.type === 'topic_submission') {
+      var topic = body.topic || {};
+      var drafts = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Drafts');
+      if (!drafts) {
+        return ContentService.createTextOutput(JSON.stringify({ ok: false, error: 'Drafts tab not found' }))
+          .setMimeType(ContentService.MimeType.JSON);
+      }
+
+      drafts.appendRow([
+        topic.mediaUrl || '',
+        topic.title || '',
+        Array.isArray(topic.platforms) ? topic.platforms.join(',') : '',
+        '',
+        'idea',
+        'Submitted by client: ' + (topic.requestedBy || '')
+      ]);
+      logEntry('doPost', null, 'topic_submission', String(topic.title || '').substring(0, 120));
+      return ContentService.createTextOutput(JSON.stringify({ ok: true }))
+        .setMimeType(ContentService.MimeType.JSON);
+    }
+
     // ── Publish result from Scenario 1 ───────────────────────────────────────
     var postId   = body.post_id;
     var results  = body.results || [];
