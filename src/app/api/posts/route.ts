@@ -14,7 +14,26 @@ export async function GET() {
   if (!session) return NextResponse.json({ ok: false, error: "Unauthorised" }, { status: 401 });
 
   try {
-    const rows = await getPosts((session as any).accessToken as string);
+    const token = (session as any).accessToken as string;
+    const rows = await getPosts(token);
+    const userEmail = norm((session as any)?.user?.email || "");
+
+    // Client users should only see posts associated with their own client record.
+    // VA users keep full visibility across all clients.
+    if (userEmail) {
+      try {
+        const clients = await getClients(token);
+        const myClient = clients.find((c) => norm(c.email) === userEmail);
+        if (myClient) {
+          const myIds = new Set([norm(myClient.id), norm(myClient.name), norm(myClient.email)]);
+          const scoped = rows.filter((p) => myIds.has(norm(p.clientId)));
+          return NextResponse.json<ApiResult>({ ok: true, data: scoped });
+        }
+      } catch {
+        // If client lookup fails, fall back to full list so VA workflows keep working.
+      }
+    }
+
     return NextResponse.json<ApiResult>({ ok: true, data: rows });
   } catch (err: any) {
     return NextResponse.json<ApiResult>({ ok: false, error: err.message }, { status: 500 });

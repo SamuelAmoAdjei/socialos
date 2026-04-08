@@ -33,6 +33,7 @@ export default function SchedulePage() {
   const [toast,    setToast]    = useState<{msg:string;ok:boolean}|null>(null);
   const [timeRange, setTimeRange] = useState<"all"|"week"|"month"|"year">("all");
   const [platformFilter, setPlatformFilter] = useState<"all"|Platform>("all");
+  const [refreshing, setRefreshing] = useState(false);
 
   const [editMode, setEditMode] = useState(false);
   const [savingEdit, setSavingEdit] = useState(false);
@@ -45,9 +46,13 @@ export default function SchedulePage() {
   const [editPlats, setEditPlats] = useState<Set<Platform>>(new Set());
 
   const load = useCallback(() => {
+    setRefreshing(true);
     fetch("/api/posts").then(r=>r.json())
       .then(res=>{ if(res.ok) setPosts(res.data); })
-      .finally(()=>setLoading(false));
+      .finally(()=>{
+        setLoading(false);
+        setRefreshing(false);
+      });
   }, []);
 
   useEffect(() => {
@@ -218,7 +223,8 @@ export default function SchedulePage() {
         </div>
         <div style={{display:"flex",gap:8}}>
           <button className="btn btn-secondary btn-sm" onClick={load}>
-            <RefreshIco/> Refresh
+            {refreshing ? <span className="spinner" style={{marginRight:6}}/> : <RefreshIco/>}
+            {refreshing ? "Refreshing..." : "Refresh"}
           </button>
           <button className="btn btn-primary" onClick={()=>router.push("/dashboard/compose")}>
             <PlusIco/> New Post

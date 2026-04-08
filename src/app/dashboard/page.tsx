@@ -2,7 +2,7 @@
 
 import { useSession } from "next-auth/react";
 import { useRouter }  from "next/navigation";
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useMemo } from "react";
 import type { Post, Client } from "@/types";
 
 const PLAT: Record<string,{cls:string;label:string}> = {
@@ -32,6 +32,7 @@ export default function DashboardPage() {
   const [clients, setClients] = useState<Client[]>([]);
   const [loading, setLoading] = useState(true);
   const firstName = session?.user?.name?.split(" ")[0] ?? "there";
+  const [activeClientTimezone, setActiveClientTimezone] = useState<string>("UTC");
 
   const load = useCallback(async () => {
     const [pRes, cRes] = await Promise.allSettled([
@@ -39,15 +40,46 @@ export default function DashboardPage() {
       fetch("/api/clients").then(r=>r.json()),
     ]);
     if (pRes.status === "fulfilled" && pRes.value.ok) setPosts(pRes.value.data);
-    if (cRes.status === "fulfilled" && cRes.value.ok) setClients(cRes.value.data);
+    if (cRes.status === "fulfilled" && cRes.value.ok) {
+      const list = cRes.value.data as Client[];
+      setClients(list);
+      if (typeof window !== "undefined") {
+        const activeId = localStorage.getItem("sos-active-client-id") || "";
+        const activeName = localStorage.getItem("sos-active-client-name") || "";
+        const match =
+          list.find((c) => c.id === activeId) ||
+          list.find((c) => c.name === activeName);
+        setActiveClientTimezone(match?.timezone || "UTC");
+      }
+    }
     setLoading(false);
   }, []);
 
+  const vaGreeting = useMemo(() => {
+    try {
+      const nowText = new Intl.DateTimeFormat("en-US", {
+        hour: "2-digit",
+        hour12: false,
+        timeZone: activeClientTimezone || "UTC",
+      }).format(new Date());
+      const hour = Number(nowText);
+      if (hour >= 5 && hour < 12) return "Good morning";
+      if (hour >= 12 && hour < 17) return "Good afternoon";
+      if (hour >= 17 && hour < 21) return "Good evening";
+      return "Good night";
+    } catch {
+      return "Hello";
+    }
+  }, [activeClientTimezone]);
+
   useEffect(() => {
-    load();
+    const first = setTimeout(() => load(), 0);
     // Auto-refresh every 30 seconds
     const id = setInterval(load, 30_000);
-    return () => clearInterval(id);
+    return () => {
+      clearTimeout(first);
+      clearInterval(id);
+    };
   }, [load]);
 
   // Computed stats from real data
@@ -77,11 +109,11 @@ export default function DashboardPage() {
   return (
     <div>
       <div className="page-header">
-        <h1 className="page-title">Good morning, {firstName}</h1>
+        <h1 className="page-title">{vaGreeting}, {firstName}</h1>
         <p className="page-subtitle">
           {posts.length === 0
             ? "No posts yet — head to Compose to create your first post."
-            : `${posts.length} total posts · ${scheduled} scheduled · ${published} published`}
+            : `${posts.length} total posts · ${scheduled} scheduled · ${published} published · timezone: ${activeClientTimezone}`}
         </p>
       </div>
 

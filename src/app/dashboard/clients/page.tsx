@@ -44,12 +44,17 @@ export default function ClientsPage() {
   const [deleting,  setDeleting]  = useState<string|null>(null);
   const [error,     setError]     = useState("");
   const [toast,     setToast]     = useState("");
+  const [refreshing,setRefreshing]= useState(false);
 
   const load = useCallback(() => {
     setLoading(true);
+    setRefreshing(true);
     fetch("/api/clients").then(r=>r.json())
       .then(res=>{ if(res.ok) setClients(res.data); })
-      .finally(()=>setLoading(false));
+      .finally(()=>{
+        setLoading(false);
+        setRefreshing(false);
+      });
   }, []);
 
   useEffect(()=>{ load(); }, [load]);
@@ -141,9 +146,14 @@ export default function ClientsPage() {
             {loading?"Loading…":`${clients.length} client${clients.length!==1?"s":""} registered`}
           </p>
         </div>
-        <button className="btn btn-primary" onClick={openAdd}>
-          <PlusIco/> Add Client
-        </button>
+        <div style={{display:"flex",gap:8}}>
+          <button className="btn btn-secondary btn-sm" onClick={load} disabled={refreshing}>
+            {refreshing ? <><span className="spinner" style={{marginRight:6}}/>Refreshing...</> : "Refresh"}
+          </button>
+          <button className="btn btn-primary" onClick={openAdd}>
+            <PlusIco/> Add Client
+          </button>
+        </div>
       </div>
 
       {loading ? (

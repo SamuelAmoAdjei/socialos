@@ -56,13 +56,19 @@ export async function POST(req: NextRequest) {
       fields: "id,name,webViewLink,webContentLink",
     });
 
+    // Direct-download style URL is more reliable for downstream automation modules
+    // (e.g. Instagram/Make.com media fetch) than Drive's interactive viewer link.
+    const directUrl = `https://drive.google.com/uc?export=download&id=${fileId}`;
+
     return NextResponse.json({
       ok: true,
       data: {
         id: fileId,
         name: meta.data.name,
-        url: meta.data.webContentLink || meta.data.webViewLink,
+        url: directUrl,
+        directUrl,
         viewUrl: meta.data.webViewLink,
+        webContentLink: meta.data.webContentLink,
       },
     });
   } catch (err: any) {

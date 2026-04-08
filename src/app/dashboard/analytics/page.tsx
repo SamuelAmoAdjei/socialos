@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import type { AnalyticsRow } from "@/types";
 
 const PLAT_COLORS: Record<string,string> = {
@@ -14,16 +14,30 @@ export default function AnalyticsPage() {
   const [data,     setData]     = useState<AnalyticsRow[]>([]);
   const [loading,  setLoading]  = useState(true);
   const [platform, setPlatform] = useState("all");
+  const [refreshing, setRefreshing] = useState(false);
 
-  useEffect(() => {
+  const load = useCallback(async (forceRefresh = false) => {
     const url = platform !== "all"
       ? `/api/analytics?platform=${platform}&limit=30`
       : "/api/analytics?limit=60";
-    setLoading(true);
+    if (forceRefresh) setRefreshing(true);
+    else setLoading(true);
     fetch(url).then(r => r.json())
       .then(res => { if (res.ok) setData(res.data); })
-      .finally(() => setLoading(false));
+      .finally(() => {
+        setLoading(false);
+        setRefreshing(false);
+      });
   }, [platform]);
+
+  useEffect(() => {
+    const first = setTimeout(() => load(false), 0);
+    const id = setInterval(() => load(false), 30_000);
+    return () => {
+      clearTimeout(first);
+      clearInterval(id);
+    };
+  }, [platform, load]);
 
   const totals = data.reduce((a,r) => ({
     impressions: a.impressions + r.impressions,
@@ -44,6 +58,11 @@ export default function AnalyticsPage() {
       <div className="page-header">
         <h1 className="page-title">Analytics</h1>
         <p className="page-subtitle">Data synced daily from your connected platforms via Make.com Scenario 2.</p>
+      </div>
+      <div style={{display:"flex",justifyContent:"flex-end",marginBottom:12}}>
+        <button className="btn btn-secondary btn-sm" onClick={() => load(true)} disabled={refreshing}>
+          {refreshing ? <><span className="spinner" style={{marginRight:6}}/>Refreshing...</> : "Refresh"}
+        </button>
       </div>
 
       {/* Platform filter */}
