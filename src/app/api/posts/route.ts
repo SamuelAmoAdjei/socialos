@@ -1,8 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
-import { createPost, getPosts } from "@/lib/sheets";
+import { createPost, getClients, getPosts } from "@/lib/sheets";
 import type { ApiResult, Platform, PostStatus } from "@/types";
+
+function norm(v: string) {
+  return String(v || "").trim().toLowerCase();
+}
 
 export async function GET() {
   const session = await getServerSession(authOptions);
@@ -34,9 +38,31 @@ export async function POST(req: NextRequest) {
       return NextResponse.json<ApiResult>({ ok: false, error: "Select at least one platform" }, { status: 400 });
     }
 
-    const status = (body.status ?? "draft") as PostStatus;
+    const clientId = String(body.clientId || "client");
+    const requestedStatus = (body.status ?? "draft") as PostStatus;
+    const token = (session as any).accessToken as string;
+    let finalStatus: PostStatus = requestedStatus;
+
+    // Enforce client approval mode based on the Clients sheet.
+    // If this client requires approval, scheduling should go to "pending" first.
+    try {
+      const clients = await getClients(token);
+      const match = clients.find(
+        (c) =>
+          norm(c.id) === norm(clientId) ||
+          norm(c.name) === norm(clientId) ||
+          norm(c.email) === norm(clientId)
+      );
+
+      if (match?.approvalRequired && requestedStatus === "approved") {
+        finalStatus = "pending";
+      }
+    } catch {
+      // If client lookup fails, keep requested status to avoid blocking post creation.
+    }
+
     const id = await createPost((session as any).accessToken as string, {
-      clientId: body.clientId || "client",
+      clientId,
       content,
       liOverride: body.liOverride || undefined,
       xOverride: body.xOverride || undefined,
@@ -44,11 +70,11 @@ export async function POST(req: NextRequest) {
       platforms,
       mediaUrl: body.mediaUrl || undefined,
       scheduledAt: body.scheduledAt || "",
-      status,
+      status: finalStatus,
       docLink: body.docLink || undefined,
     });
 
-    return NextResponse.json<ApiResult>({ ok: true, data: { id } }, { status: 201 });
+    return NextResponse.json<ApiResult>({ ok: true, data: { id, status: finalStatus } }, { status: 201 });
   } catch (err: any) {
     return NextResponse.json<ApiResult>({ ok: false, error: err.message }, { status: 500 });
   }

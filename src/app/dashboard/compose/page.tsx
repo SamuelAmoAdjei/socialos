@@ -148,8 +148,8 @@ export default function ComposePage() {
   function getClientId(): string {
     if (typeof window === "undefined") return "client";
     return (
-      localStorage.getItem("sos-active-client-name") ||
       localStorage.getItem("sos-active-client-id")   ||
+      localStorage.getItem("sos-active-client-name") ||
       "client"
     );
   }
@@ -225,7 +225,12 @@ export default function ComposePage() {
       const data = await res.json();
 
       if (res.ok && data.ok) {
-        toast(`✓ Post scheduled for ${new Date(scheduledAt).toLocaleString()} — Apps Script will fire it automatically`, "success");
+        const savedStatus = data?.data?.status;
+        if (savedStatus === "pending") {
+          toast("✓ Sent to client approval queue. It will publish only after client approval.", "success");
+        } else {
+          toast(`✓ Post scheduled for ${new Date(scheduledAt).toLocaleString()} — Apps Script will fire it automatically`, "success");
+        }
         setScheduleModal(false);
         // Reset form
         setContent(""); setMediaUrl(""); setScheduledAt("");
@@ -367,7 +372,7 @@ export default function ComposePage() {
               </div>
 
               <div style={{padding:"10px 12px",background:"var(--accent-dim)",border:"1px solid rgba(0,194,168,0.20)",borderRadius:"var(--radius-sm)",fontSize:"0.78rem",color:"var(--text-2)",lineHeight:1.6}}>
-                Post saved as "approved". Apps Script fires the Make.com webhook at the scheduled time.
+                Schedule respects client approval mode. If approval is required, this goes to the client portal first as "pending".
               </div>
             </div>
             <div className="modal-foot">

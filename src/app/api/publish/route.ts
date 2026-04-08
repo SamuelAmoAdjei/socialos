@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
-import { createPost, getSettings, appendLog, updatePostRow, getPosts } from "@/lib/sheets";
+import { createPost, getSettings, appendLog, updatePostRow, getPosts, getClients } from "@/lib/sheets";
 import type { ApiResult, Platform } from "@/types";
 
 function getBaseUrl(req: NextRequest): string {
@@ -11,6 +11,10 @@ function getBaseUrl(req: NextRequest): string {
   const proto = req.headers.get("x-forwarded-proto") || "https";
   if (host) return `${proto}://${host}`;
   return "https://socialosv1.vercel.app";
+}
+
+function norm(v: string) {
+  return String(v || "").trim().toLowerCase();
 }
 
 export async function POST(req: NextRequest) {
@@ -23,6 +27,7 @@ export async function POST(req: NextRequest) {
   try {
     const body              = await req.json();
     const selectedPlatforms = (body.platforms ?? []).map((p:string) => p.toLowerCase() as Platform);
+    const clientId = String(body.clientId || "client");
 
     if (selectedPlatforms.length === 0) {
       return NextResponse.json<ApiResult>({ ok:false, error:"Select at least one platform" }, { status:400 });
@@ -33,9 +38,29 @@ export async function POST(req: NextRequest) {
     const xOverride  = (body.xOverride || content).substring(0, 280);
     const igOverride = body.igOverride || content;
 
+    // Enforce approval policy before publishing now.
+    // If approval is required for this client, VA cannot bypass client approval.
+    try {
+      const clients = await getClients(token);
+      const match = clients.find(
+        (c) =>
+          norm(c.id) === norm(clientId) ||
+          norm(c.name) === norm(clientId) ||
+          norm(c.email) === norm(clientId)
+      );
+      if (match?.approvalRequired) {
+        return NextResponse.json<ApiResult>({
+          ok: false,
+          error: "This client requires approval first. Use Schedule to send it to the client portal.",
+        }, { status: 403 });
+      }
+    } catch {
+      // If client lookup fails, do not block explicit publish-now action.
+    }
+
     // 1. Save post to Sheet
     const id = await createPost(token, {
-      clientId:    body.clientId || "client",
+      clientId,
       content,
       liOverride:  body.liOverride || undefined,
       xOverride:   body.xOverride  || undefined,

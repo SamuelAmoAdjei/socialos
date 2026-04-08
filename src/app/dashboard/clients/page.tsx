@@ -87,7 +87,10 @@ export default function ClientsPage() {
     try {
       const res = await fetch("/api/clients",{
         method:"POST", headers:{"Content-Type":"application/json"},
-        body: JSON.stringify(form),
+        body: JSON.stringify({
+          ...form,
+          clientId: editTarget?.id || undefined,
+        }),
       }).then(r=>r.json());
 
       if (res.ok) {
