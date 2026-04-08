@@ -23,7 +23,8 @@ export async function POST(req: NextRequest) {
 
     // ── Analytics sync (from Make.com Scenario 2) ──────────────────────
     if (body.type === "analytics") {
-      const { accessToken, data } = body;
+      const accessToken = body.accessToken || body.access_token;
+      const { data } = body;
       if (!accessToken || !Array.isArray(data)) {
         return NextResponse.json({ ok: false, error: "Missing accessToken or data" }, { status: 400 });
       }
@@ -32,8 +33,21 @@ export async function POST(req: NextRequest) {
     }
 
     // ── Publish result (from Make.com Scenario 1) ─────────────────────
-    const { post_id, results, access_token } = body;
-    if (!post_id || !Array.isArray(results) || !access_token) {
+    const post_id = body.post_id || body.postId;
+    const access_token = body.access_token || body.accessToken;
+    const rawResults = body.results || body.aggregated_results || body.platform_results;
+    const results = Array.isArray(rawResults)
+      ? rawResults
+      : rawResults && typeof rawResults === "object"
+        ? Object.entries(rawResults).map(([platform, item]: [string, any]) => ({
+            platform,
+            status: item?.status || "failed",
+            post_id: item?.post_id || "",
+            error: item?.error || "",
+          }))
+        : [];
+
+    if (!post_id || !Array.isArray(results) || results.length === 0 || !access_token) {
       return NextResponse.json({ ok: false, error: "Missing post_id, results, or access_token" }, { status: 400 });
     }
 
