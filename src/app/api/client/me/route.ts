@@ -8,6 +8,17 @@ function norm(s: string) {
   return (s ?? "").toLowerCase().trim();
 }
 
+async function resolveAppsScriptUrl(token: string): Promise<string> {
+  const envUrl = process.env.APPS_SCRIPT_WEB_APP_URL || process.env.CALLBACK_URL || "";
+  if (envUrl) return envUrl;
+  try {
+    const settings = await getSettings(token);
+    return settings["CALLBACK_URL"] || settings["callback_url"] || "";
+  } catch {
+    return "";
+  }
+}
+
 export async function GET() {
   const session = await getServerSession(authOptions);
   if (!session?.user?.email) {
@@ -51,8 +62,24 @@ export async function GET() {
           readonly: true,
         },
       });
-    } catch (err: any) {
-      return NextResponse.json<ApiResult>({ ok: false, error: err.message }, { status: 500 });
+    } catch {
+      const envClientEmail = norm(process.env.CLIENT_EMAIL || "");
+      if (envClientEmail && envClientEmail === email) {
+        return NextResponse.json<ApiResult>({
+          ok: true,
+          data: {
+            id: envClientEmail,
+            name: session.user?.name || "Client",
+            email: envClientEmail,
+            approvalRequired: true,
+            readonly: true,
+          },
+        });
+      }
+      return NextResponse.json<ApiResult>({
+        ok: false,
+        error: "Client profile unavailable. Add CLIENT_EMAIL in env or share sheet access.",
+      }, { status: 500 });
     }
   }
 }
@@ -83,10 +110,36 @@ export async function PATCH(req: NextRequest) {
   } catch (err: any) {
     const msg = String(err?.message || "");
     if (msg.toLowerCase().includes("permission")) {
+      const token = (session as any).accessToken as string;
+      const callbackUrl = await resolveAppsScriptUrl(token);
+      if (!callbackUrl) {
+        return NextResponse.json<ApiResult>({
+          ok: false,
+          error: "No fallback Apps Script URL configured. Set APPS_SCRIPT_WEB_APP_URL in Vercel.",
+        }, { status: 400 });
+      }
+
+      const res = await fetch(callbackUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          type: "client_approval_mode_update",
+          clientEmail: session.user!.email!,
+          approvalRequired: body.approvalRequired,
+          requestedBy: session.user!.email!,
+        }),
+      });
+      const text = await res.text();
+      if (!res.ok) {
+        return NextResponse.json<ApiResult>({
+          ok: false,
+          error: `Fallback update failed: ${text.slice(0, 180)}`,
+        }, { status: 502 });
+      }
       return NextResponse.json<ApiResult>({
-        ok: false,
-        error: "This account cannot update approval mode directly. Ask the VA to update it from the Clients page.",
-      }, { status: 403 });
+        ok: true,
+        data: { approvalRequired: body.approvalRequired, via: "apps_script" },
+      });
     }
     return NextResponse.json<ApiResult>({ ok: false, error: msg }, { status: 500 });
   }

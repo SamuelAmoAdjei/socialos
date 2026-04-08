@@ -21,12 +21,22 @@ async function sendTopicToAppsScript(
   body: any,
   requestedBy: string
 ) {
-  const settings = await getSettings(token);
-  const callbackUrl = settings["CALLBACK_URL"] || settings["callback_url"] || "";
+  let callbackUrl =
+    process.env.APPS_SCRIPT_WEB_APP_URL ||
+    process.env.CALLBACK_URL ||
+    "";
+  if (!callbackUrl) {
+    try {
+      const settings = await getSettings(token);
+      callbackUrl = settings["CALLBACK_URL"] || settings["callback_url"] || "";
+    } catch {
+      // Keep env fallback only.
+    }
+  }
   if (!callbackUrl) {
     return NextResponse.json<ApiResult>({
       ok: false,
-      error: "CALLBACK_URL is not configured in Settings. Set it in Dashboard -> Settings -> Make.com.",
+      error: "Apps Script Web App URL missing. Set APPS_SCRIPT_WEB_APP_URL in Vercel (or CALLBACK_URL in Settings).",
     }, { status: 400 });
   }
 

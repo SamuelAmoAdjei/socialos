@@ -194,6 +194,24 @@ function doPost(e) {
         .setMimeType(ContentService.MimeType.JSON);
     }
 
+    // ── Client approval mode toggle (fallback for limited OAuth accounts) ────
+    if (body.type === 'client_approval_mode_update') {
+      var clientEmail = String(body.clientEmail || '').toLowerCase().trim();
+      var approvalRequired = body.approvalRequired === true;
+      if (!clientEmail) {
+        return ContentService.createTextOutput(JSON.stringify({ ok: false, error: 'Missing clientEmail' }))
+          .setMimeType(ContentService.MimeType.JSON);
+      }
+      var updated = updateClientApprovalModeByEmail(clientEmail, approvalRequired);
+      if (!updated) {
+        return ContentService.createTextOutput(JSON.stringify({ ok: false, error: 'Client not found in Clients tab' }))
+          .setMimeType(ContentService.MimeType.JSON);
+      }
+      logEntry('doPost', null, 'client_approval_mode_update', clientEmail + ' => ' + (approvalRequired ? 'TRUE' : 'FALSE'));
+      return ContentService.createTextOutput(JSON.stringify({ ok: true, approvalRequired: approvalRequired }))
+        .setMimeType(ContentService.MimeType.JSON);
+    }
+
     // ── Publish result from Scenario 1 ───────────────────────────────────────
     var postId   = body.post_id;
     var results  = body.results || [];
@@ -249,6 +267,23 @@ function doPost(e) {
     return ContentService.createTextOutput(JSON.stringify({ ok: false, error: err.message }))
       .setMimeType(ContentService.MimeType.JSON);
   }
+}
+
+function updateClientApprovalModeByEmail(clientEmail, approvalRequired) {
+  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Clients');
+  if (!sheet) return false;
+  var lastRow = sheet.getLastRow();
+  if (lastRow < 2) return false;
+  var data = sheet.getRange(2, 1, lastRow - 1, 8).getValues();
+  for (var i = 0; i < data.length; i++) {
+    var email = String(data[i][2] || '').toLowerCase().trim(); // column C
+    if (email === clientEmail) {
+      var rowIndex = i + 2;
+      sheet.getRange(rowIndex, 7).setValue(approvalRequired ? 'TRUE' : 'FALSE'); // column G
+      return true;
+    }
+  }
+  return false;
 }
 
 // ─── ANALYTICS WRITER ─────────────────────────────────────────────────────────

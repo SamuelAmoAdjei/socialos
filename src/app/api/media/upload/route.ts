@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { google } from "googleapis";
+import { Readable } from "stream";
 import { authOptions } from "@/lib/auth";
 
 export async function POST(req: NextRequest) {
@@ -25,6 +26,7 @@ export async function POST(req: NextRequest) {
 
     const ab = await file.arrayBuffer();
     const buffer = Buffer.from(ab);
+    const stream = Readable.from(buffer);
 
     const created = await drive.files.create({
       requestBody: {
@@ -33,7 +35,7 @@ export async function POST(req: NextRequest) {
       },
       media: {
         mimeType: file.type || "application/octet-stream",
-        body: buffer,
+        body: stream,
       },
       fields: "id,name",
     });
