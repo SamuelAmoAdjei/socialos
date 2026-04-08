@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
-import { getClients, updateClientApprovalRequired } from "@/lib/sheets";
+import { getClients, getSettings, updateClientApprovalRequired } from "@/lib/sheets";
 import type { ApiResult } from "@/types";
 
 function norm(s: string) {
@@ -14,10 +14,12 @@ export async function GET() {
     return NextResponse.json({ ok: false, error: "Unauthorised" }, { status: 401 });
   }
 
+  const token = (session as any).accessToken as string;
+  const email = norm(session.user!.email!);
+
   try {
-    const token = (session as any).accessToken as string;
     const clients = await getClients(token);
-    const me = clients.find((c) => norm(c.email) === norm(session.user!.email!));
+    const me = clients.find((c) => norm(c.email) === email);
     if (!me) {
       return NextResponse.json<ApiResult>({ ok: false, error: "No client record for your email" }, { status: 404 });
     }
@@ -30,8 +32,28 @@ export async function GET() {
         approvalRequired: me.approvalRequired,
       },
     });
-  } catch (err: any) {
-    return NextResponse.json<ApiResult>({ ok: false, error: err.message }, { status: 500 });
+  } catch {
+    // Fallback for client accounts that cannot read the Clients tab directly.
+    // Keep portal usable and default to safest mode (approval required).
+    try {
+      const settings = await getSettings(token);
+      const settingsEmail = norm(settings["CLIENT_EMAIL"] || "");
+      if (!settingsEmail || settingsEmail !== email) {
+        return NextResponse.json<ApiResult>({ ok: false, error: "No client record for your email" }, { status: 404 });
+      }
+      return NextResponse.json<ApiResult>({
+        ok: true,
+        data: {
+          id: settingsEmail,
+          name: settings["CLIENT_NAME"] || session.user?.name || "Client",
+          email: settingsEmail,
+          approvalRequired: true,
+          readonly: true,
+        },
+      });
+    } catch (err: any) {
+      return NextResponse.json<ApiResult>({ ok: false, error: err.message }, { status: 500 });
+    }
   }
 }
 
@@ -59,6 +81,13 @@ export async function PATCH(req: NextRequest) {
       data: { approvalRequired: body.approvalRequired },
     });
   } catch (err: any) {
-    return NextResponse.json<ApiResult>({ ok: false, error: err.message }, { status: 500 });
+    const msg = String(err?.message || "");
+    if (msg.toLowerCase().includes("permission")) {
+      return NextResponse.json<ApiResult>({
+        ok: false,
+        error: "This account cannot update approval mode directly. Ask the VA to update it from the Clients page.",
+      }, { status: 403 });
+    }
+    return NextResponse.json<ApiResult>({ ok: false, error: msg }, { status: 500 });
   }
 }

@@ -166,9 +166,15 @@ export default function ClientPortal() {
       .then((res) => {
         if (res.ok && res.data && typeof res.data.approvalRequired === "boolean") {
           setApprovalRequired(res.data.approvalRequired);
+        } else {
+          // Safe default to avoid indefinite "loading preferences" state.
+          setApprovalRequired(true);
+          if (res?.error) showToast(res.error, "info");
         }
       })
-      .catch(() => {});
+      .catch(() => {
+        setApprovalRequired(true);
+      });
   }, [role]);
 
   async function setApprovalMode(next: boolean) {
