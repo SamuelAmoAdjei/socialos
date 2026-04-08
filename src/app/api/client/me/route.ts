@@ -90,11 +90,13 @@ export async function PATCH(req: NextRequest) {
     return NextResponse.json({ ok: false, error: "Unauthorised" }, { status: 401 });
   }
 
+  let requestedApprovalRequired: boolean | undefined;
   try {
     const body = await req.json();
     if (typeof body.approvalRequired !== "boolean") {
       return NextResponse.json<ApiResult>({ ok: false, error: "approvalRequired boolean required" }, { status: 400 });
     }
+    requestedApprovalRequired = body.approvalRequired;
     const token = (session as any).accessToken as string;
     const clients = await getClients(token);
     const me = clients.find((c) => norm(c.email) === norm(session.user!.email!));
@@ -105,11 +107,14 @@ export async function PATCH(req: NextRequest) {
     await updateClientApprovalRequired(token, session.user!.email!, body.approvalRequired);
     return NextResponse.json<ApiResult>({
       ok: true,
-      data: { approvalRequired: body.approvalRequired },
+      data: { approvalRequired: requestedApprovalRequired },
     });
   } catch (err: any) {
     const msg = String(err?.message || "");
     if (msg.toLowerCase().includes("permission")) {
+      if (typeof requestedApprovalRequired !== "boolean") {
+        return NextResponse.json<ApiResult>({ ok: false, error: "approvalRequired boolean required" }, { status: 400 });
+      }
       const token = (session as any).accessToken as string;
       const callbackUrl = await resolveAppsScriptUrl(token);
       if (!callbackUrl) {
@@ -125,7 +130,7 @@ export async function PATCH(req: NextRequest) {
         body: JSON.stringify({
           type: "client_approval_mode_update",
           clientEmail: session.user!.email!,
-          approvalRequired: body.approvalRequired,
+          approvalRequired: requestedApprovalRequired,
           requestedBy: session.user!.email!,
         }),
       });
@@ -138,7 +143,7 @@ export async function PATCH(req: NextRequest) {
       }
       return NextResponse.json<ApiResult>({
         ok: true,
-        data: { approvalRequired: body.approvalRequired, via: "apps_script" },
+        data: { approvalRequired: requestedApprovalRequired, via: "apps_script" },
       });
     }
     return NextResponse.json<ApiResult>({ ok: false, error: msg }, { status: 500 });
