@@ -12,6 +12,13 @@ function norm(v: string) {
   return String(v || "").trim().toLowerCase();
 }
 
+function getClientPortalUrl(): string {
+  const base =
+    (process.env.NEXT_PUBLIC_APP_URL || process.env.NEXTAUTH_URL || "https://socialosv1.vercel.app")
+      .replace(/\/$/, "");
+  return `${base}/client`;
+}
+
 // The callback uses a shared secret instead of a user session
 // because Make.com calls it server-to-server.
 const CALLBACK_SECRET = process.env.MAKE_CALLBACK_SECRET ?? "";
@@ -108,21 +115,21 @@ export async function POST(req: NextRequest) {
           (match?.email && match.email.trim()) ||
           (settings["CLIENT_EMAIL"] || "").trim();
         const vaEmail = (settings["VA_EMAIL"] || "").trim();
-        const appBase = (process.env.NEXT_PUBLIC_APP_URL || process.env.NEXTAUTH_URL || "").replace(/\/$/, "");
-        const portal = appBase ? `${appBase}/client` : "/client";
+        const portal = getClientPortalUrl();
         if (clientEmail) {
           const subj =
             newStatus === "published"
-              ? "SocialOS — your post was published"
-              : "SocialOS — your post was partially published";
+              ? "SocialOS - Your post was published"
+              : "SocialOS - Your post was partially published";
           await sendEmailAsUser(
             access_token,
             clientEmail,
             subj,
             `Status: ${newStatus}\n\n` +
               `Post ID: ${post_id}\n` +
-              (post.content ? `Content preview: ${post.content.substring(0, 400)}${post.content.length > 400 ? "…" : ""}\n\n` : "") +
-              `Review in portal: ${portal}\n` +
+              (post.content ? `Content preview: ${post.content.substring(0, 400)}${post.content.length > 400 ? "..." : ""}\n\n` : "") +
+              `Client portal link (tap to open): ${portal}\n` +
+              `Client portal URL: ${portal}\n` +
               (errorMsg ? `\nNote: ${errorMsg}\n` : "")
           );
         }
@@ -130,7 +137,7 @@ export async function POST(req: NextRequest) {
           await sendEmailAsUser(
             access_token,
             vaEmail,
-            `SocialOS — publish complete (${newStatus})`,
+            `SocialOS - Publish complete (${newStatus})`,
             `Post ${post_id} finished as ${newStatus}.\n${errorMsg ? errorMsg + "\n" : ""}`
           );
         }

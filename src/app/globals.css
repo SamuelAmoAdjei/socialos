@@ -232,6 +232,10 @@ img,svg { display:block }
   font-size:0.8rem; font-weight:500;
   padding:7px 10px; cursor:pointer; appearance:none;
 }
+.client-select option {
+  color: #F1F5F9;
+  background: #0F1623;
+}
 .client-select:focus { outline:none; border-color:var(--accent) }
 .client-status-row { display:flex; align-items:center; gap:6px; margin-top:var(--radius-xs) }
 .status-pulse {

@@ -190,6 +190,14 @@ function doPost(e) {
         'Submitted by client: ' + (topic.requestedBy || '')
       ]);
       logEntry('doPost', null, 'topic_submission', String(topic.title || '').substring(0, 120));
+      sendVaEventEmail(settings, 'New client topic submitted', [
+        'A client submitted a new topic idea.',
+        'Title: ' + String(topic.title || ''),
+        'Platforms: ' + (Array.isArray(topic.platforms) ? topic.platforms.join(', ') : ''),
+        'Requested by: ' + String(topic.requestedBy || ''),
+        '',
+        'Open Drafts tab in your SocialOS sheet to review.',
+      ].join('\n'));
       return ContentService.createTextOutput(JSON.stringify({ ok: true }))
         .setMimeType(ContentService.MimeType.JSON);
     }
@@ -208,6 +216,11 @@ function doPost(e) {
           .setMimeType(ContentService.MimeType.JSON);
       }
       logEntry('doPost', null, 'client_approval_mode_update', clientEmail + ' => ' + (approvalRequired ? 'TRUE' : 'FALSE'));
+      sendVaEventEmail(settings, 'Client approval mode changed', [
+        'A client changed approval mode in the portal.',
+        'Client email: ' + clientEmail,
+        'New mode: ' + (approvalRequired ? 'Approval required' : 'Auto-publish allowed'),
+      ].join('\n'));
       return ContentService.createTextOutput(JSON.stringify({ ok: true, approvalRequired: approvalRequired }))
         .setMimeType(ContentService.MimeType.JSON);
     }
@@ -266,6 +279,15 @@ function doPost(e) {
     logEntry('doPost', null, 'exception', err.message);
     return ContentService.createTextOutput(JSON.stringify({ ok: false, error: err.message }))
       .setMimeType(ContentService.MimeType.JSON);
+  }
+}
+
+function sendVaEventEmail(settings, subject, body) {
+  if (!settings || !settings.vaEmail) return;
+  try {
+    GmailApp.sendEmail(String(settings.vaEmail), 'SocialOS — ' + subject, body);
+  } catch (e) {
+    Logger.log('VA event email failed: ' + e.message);
   }
 }
 

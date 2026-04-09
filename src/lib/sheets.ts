@@ -217,12 +217,16 @@ export async function updateClientApprovalRequired(
   clientEmail: string,
   approvalRequired: boolean
 ): Promise<void> {
-  const clients = await getClients(accessToken);
-  const idx = clients.findIndex((c) => normEmail(c.email) === normEmail(clientEmail));
-  if (idx === -1) throw new Error("Client record not found for this email");
-  const rowIndex = idx + 2;
   const api = shts(accessToken);
   const tabName = await resolveTab(accessToken, "Clients");
+  const res = await api.spreadsheets.values.get({
+    spreadsheetId: SHEET_ID,
+    range: `${tabName}!A2:H`,
+  });
+  const rows = res.data.values ?? [];
+  const idx = rows.findIndex((row) => normEmail(String(row[2] ?? "")) === normEmail(clientEmail));
+  if (idx === -1) throw new Error("Client record not found for this email");
+  const rowIndex = idx + 2;
   await api.spreadsheets.values.update({
     spreadsheetId:    SHEET_ID,
     range:            `${tabName}!G${rowIndex}`,

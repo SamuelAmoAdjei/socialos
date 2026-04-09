@@ -101,6 +101,8 @@ export default function ClientsPage() {
       if (res.ok) {
         setModal(null);
         load();
+        localStorage.setItem("sos-clients-updated-at", String(Date.now()));
+        window.dispatchEvent(new Event("sos:clients-updated"));
         showToast(modal==="edit"?"Client updated":"Client added — they can now log in at /client");
       } else {
         setError(res.error||"Failed to save client");
@@ -120,6 +122,8 @@ export default function ClientsPage() {
 
       if (res.ok) {
         setClients(prev=>prev.filter(x=>x.id!==c.id));
+        localStorage.setItem("sos-clients-updated-at", String(Date.now()));
+        window.dispatchEvent(new Event("sos:clients-updated"));
         showToast("Client removed from your Sheet");
       } else {
         showToast(res.error||"Delete failed");

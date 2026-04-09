@@ -9,6 +9,13 @@ function norm(v: string) {
   return String(v || "").trim().toLowerCase();
 }
 
+function getClientPortalUrl(): string {
+  const base =
+    (process.env.NEXT_PUBLIC_APP_URL || process.env.NEXTAUTH_URL || "https://socialosv1.vercel.app")
+      .replace(/\/$/, "");
+  return `${base}/client`;
+}
+
 export async function GET() {
   const session = await getServerSession(authOptions);
   if (!session) return NextResponse.json({ ok: false, error: "Unauthorised" }, { status: 401 });
@@ -107,17 +114,17 @@ export async function POST(req: NextRequest) {
         const clientEmail =
           (match?.email && match.email.trim()) ||
           (settings["CLIENT_EMAIL"] || "").trim();
-        const appBase = (process.env.NEXT_PUBLIC_APP_URL || process.env.NEXTAUTH_URL || "").replace(/\/$/, "");
-        const portal = appBase ? `${appBase}/client` : "/client";
+        const portal = getClientPortalUrl();
         if (clientEmail) {
           await sendEmailAsUser(
             token,
             clientEmail,
-            "SocialOS — a post is waiting for your approval",
+            "SocialOS - A post is waiting for your approval",
             `Your VA has scheduled content for review.\n\n` +
-              `Open your client portal: ${portal}\n\n` +
+              `Client portal link (tap to open): ${portal}\n` +
+              `Client portal URL: ${portal}\n\n` +
               `Post ID: ${id}\n` +
-              `Preview: ${content.substring(0, 280)}${content.length > 280 ? "…" : ""}\n`
+              `Preview: ${content.substring(0, 280)}${content.length > 280 ? "..." : ""}\n`
           );
         }
       } catch {

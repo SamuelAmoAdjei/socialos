@@ -82,6 +82,20 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const [clients,       setClients]       = useState<{id:string;name:string}[]>([]);
   const [activeClient,  setActiveClient]  = useState<string>("");
 
+  const loadSidebarClients = useCallback(() => {
+    fetch("/api/clients").then(r=>r.json()).then(res => {
+      if (!(res.ok && Array.isArray(res.data) && res.data.length > 0)) return;
+      const list = res.data.map((c:any)=>({id:c.id,name:c.name}));
+      setClients(list);
+      const savedId = localStorage.getItem("sos-active-client-id");
+      const found = savedId ? list.find((c:any) => c.id === savedId) : null;
+      const chosen = found ?? list[0];
+      setActiveClient(chosen.id);
+      localStorage.setItem("sos-active-client-id", chosen.id);
+      localStorage.setItem("sos-active-client-name", chosen.name);
+    }).catch(()=>{});
+  }, []);
+
   const loadBadge = useCallback(() => {
     fetch("/api/posts").then(r=>r.json()).then(res => {
       if (!res.ok) return;
@@ -123,22 +137,25 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     }).catch(()=>{});
   }, []); // empty deps — stable reference, never recreated
 
-  /* Load clients for sidebar — once on mount */
+  /* Load clients for sidebar and keep in sync */
   useEffect(() => {
-    fetch("/api/clients").then(r=>r.json()).then(res => {
-      if (res.ok && Array.isArray(res.data) && res.data.length > 0) {
-        const list = res.data.map((c:any)=>({id:c.id,name:c.name}));
-        setClients(list);
-        // Read saved active client or default to first
-        const savedId = localStorage.getItem("sos-active-client-id");
-        const found   = savedId ? list.find((c:any) => c.id === savedId) : null;
-        const chosen  = found ?? list[0];
-        setActiveClient(chosen.id);
-        localStorage.setItem("sos-active-client-id",   chosen.id);
-        localStorage.setItem("sos-active-client-name", chosen.name);
-      }
-    }).catch(()=>{});
-  }, []);
+    loadSidebarClients();
+    const onStorage = (e: StorageEvent) => {
+      if (e.key === "sos-clients-updated-at") loadSidebarClients();
+    };
+    const onInternal = () => loadSidebarClients();
+    const onFocus = () => loadSidebarClients();
+    window.addEventListener("storage", onStorage);
+    window.addEventListener("sos:clients-updated", onInternal as EventListener);
+    window.addEventListener("focus", onFocus);
+    const id = setInterval(loadSidebarClients, 45_000);
+    return () => {
+      window.removeEventListener("storage", onStorage);
+      window.removeEventListener("sos:clients-updated", onInternal as EventListener);
+      window.removeEventListener("focus", onFocus);
+      clearInterval(id);
+    };
+  }, [loadSidebarClients]);
 
   /* Poll badge + notifs — every 2 minutes, only when authenticated */
   useEffect(() => {
