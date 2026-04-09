@@ -1,83 +1,123 @@
-/**
- * POST /api/topics
- * Called by the client portal when submitting a topic idea.
- * 
- * Strategy:
- *   1. Try to write directly to the Posts Sheet (works if client has Sheets scope)
- *   2. Always also forward to Apps Script (for email notification + Drafts tab)
- */
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
-import { createPost } from "@/lib/sheets";
+import { createPost, getSettings } from "@/lib/sheets";
 import type { ApiResult, Platform } from "@/types";
+
+function isPermissionError(msg: string): boolean {
+  const m = msg.toLowerCase();
+  return (
+    m.includes("caller does not have permission") ||
+    m.includes("does not have permission") ||
+    m.includes("insufficient permission") ||
+    m.includes("permission denied")
+  );
+}
+
+async function sendTopicToAppsScript(
+  token: string,
+  content: string,
+  platforms: Platform[],
+  body: any,
+  requestedBy: string
+) {
+  let callbackUrl =
+    process.env.APPS_SCRIPT_WEB_APP_URL ||
+    process.env.CALLBACK_URL ||
+    "";
+  if (!callbackUrl) {
+    try {
+      const settings = await getSettings(token);
+      callbackUrl = settings["CALLBACK_URL"] || settings["callback_url"] || "";
+    } catch {
+      // Keep env fallback only.
+    }
+  }
+  if (!callbackUrl) {
+    return NextResponse.json<ApiResult>({
+      ok: false,
+      error: "Apps Script Web App URL missing. Set APPS_SCRIPT_WEB_APP_URL in Vercel (or CALLBACK_URL in Settings).",
+    }, { status: 400 });
+  }
+
+  const payload = {
+    type: "topic_submission",
+    topic: {
+      title: content,
+      platforms,
+      notes: body.notes || "",
+      mediaUrl: body.mediaUrl || "",
+      requestedBy,
+    },
+  };
+
+  const res = await fetch(callbackUrl, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  const text = await res.text();
+  if (!res.ok) {
+    return NextResponse.json<ApiResult>({
+      ok: false,
+      error: `Apps Script topic submission failed: ${text.slice(0, 200)}`,
+    }, { status: 502 });
+  }
+  return NextResponse.json<ApiResult>({ ok: true, data: { savedIn: "drafts" } }, { status: 201 });
+}
 
 export async function POST(req: NextRequest) {
   const session = await getServerSession(authOptions);
   if (!session) return NextResponse.json({ ok: false, error: "Unauthorised" }, { status: 401 });
 
   try {
-    const body = await req.json();
-    const { content, platforms, mediaUrl, clientId } = body;
-
-    if (!content?.trim()) {
-      return NextResponse.json<ApiResult>({ ok: false, error: "Topic content is required" }, { status: 400 });
-    }
-
     const token = (session as any).accessToken as string;
-    let postId: string | null = null;
+    const body = await req.json();
+    const content = String(body.content ?? "").trim();
+    const platforms = (Array.isArray(body.platforms) ? body.platforms : [])
+      .map((p: string) => p.toLowerCase())
+      .filter(Boolean) as Platform[];
 
-    // 1. Write to Posts tab as a draft (with [TOPIC] prefix so VA can filter)
+    if (!content) {
+      return NextResponse.json<ApiResult>({ ok: false, error: "Topic is required" }, { status: 400 });
+    }
+    if (platforms.length === 0) {
+      return NextResponse.json<ApiResult>({ ok: false, error: "Select at least one platform" }, { status: 400 });
+    }
+
+    const requestedBy = String(session.user?.email || "");
+
+    // Client-originated topic submissions should go through Apps Script first
+    // because client accounts often don't have direct write access to all tabs.
+    const fromClientPortal =
+      !!requestedBy &&
+      (String(body.clientId || "").toLowerCase().trim() === requestedBy.toLowerCase().trim());
+    if (fromClientPortal) {
+      return await sendTopicToAppsScript(token, content, platforms, body, requestedBy);
+    }
+
+    // Primary VA path: write as a draft topic into Posts tab.
     try {
-      postId = await createPost(token, {
-        clientId:    clientId ?? session.user?.email ?? "client",
-        content:     `[TOPIC IDEA] ${content}`,
-        platforms:   (platforms ?? []) as Platform[],
-        mediaUrl:    mediaUrl ?? "",
+      const id = await createPost(token, {
+        clientId: body.clientId || session.user?.email || "client",
+        content: `[TOPIC IDEA] ${content}`,
+        liOverride: undefined,
+        xOverride: undefined,
+        igOverride: undefined,
+        platforms,
+        mediaUrl: body.mediaUrl || undefined,
         scheduledAt: "",
-        status:      "draft",
+        status: "draft",
+        docLink: undefined,
       });
-    } catch (sheetErr: any) {
-      // If direct write fails (client scope issue), we'll rely on Apps Script path below
-      console.error("Direct sheet write failed for topic:", sheetErr.message);
-    }
-
-    // 2. Also forward to Apps Script for Drafts tab + email notification
-    const appsScriptUrl = process.env.APPS_SCRIPT_URL;
-    if (appsScriptUrl) {
-      try {
-        await fetch(appsScriptUrl, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            type: "topic_submission",
-            topic: {
-              title:       content,
-              platforms:   platforms ?? [],
-              mediaUrl:    mediaUrl ?? "",
-              requestedBy: session.user?.email ?? "client",
-            },
-          }),
-        });
-      } catch (asErr: any) {
-        // Non-fatal — direct write may have already succeeded
-        console.error("Apps Script forward failed:", asErr.message);
+      return NextResponse.json<ApiResult>({ ok: true, data: { id, savedIn: "posts" } }, { status: 201 });
+    } catch (err: any) {
+      const msg = String(err?.message || "");
+      if (isPermissionError(msg)) {
+        return await sendTopicToAppsScript(token, content, platforms, body, requestedBy);
       }
+      throw err;
     }
-
-    // If neither worked, return error
-    if (!postId && !appsScriptUrl) {
-      return NextResponse.json<ApiResult>({
-        ok: false,
-        error: "Could not save topic. Check APPS_SCRIPT_URL env var or Google Sheets connection.",
-      }, { status: 500 });
-    }
-
-    return NextResponse.json<ApiResult>({
-      ok: true,
-      data: { id: postId, message: "Topic submitted successfully" },
-    }, { status: 201 });
-
   } catch (err: any) {
     return NextResponse.json<ApiResult>({ ok: false, error: err.message }, { status: 500 });
   }

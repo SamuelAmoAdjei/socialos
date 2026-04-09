@@ -9,7 +9,7 @@ export async function GET() {
   if (!session) return NextResponse.json({ ok:false, error:"Unauthorised" }, { status:401 });
   try {
     const settings = await getSettings((session as any).accessToken);
-    return NextResponse.json<ApiResult>({ ok:true, data: settings });
+    return NextResponse.json<ApiResult>({ ok:true, data:settings });
   } catch (err:any) {
     return NextResponse.json<ApiResult>({ ok:false, error:err.message }, { status:500 });
   }
@@ -21,7 +21,7 @@ export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
     await updateSettings((session as any).accessToken, body);
-    return NextResponse.json<ApiResult>({ ok:true, data: body });
+    return NextResponse.json<ApiResult>({ ok:true, data:{ saved:true } });
   } catch (err:any) {
     return NextResponse.json<ApiResult>({ ok:false, error:err.message }, { status:500 });
   }
