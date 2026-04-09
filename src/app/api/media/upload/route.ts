@@ -1,79 +1,70 @@
+/**
+ * POST /api/media/upload
+ * Accepts a multipart file upload, stores it in Google Drive,
+ * and returns a publicly shareable URL.
+ */
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
-import { google } from "googleapis";
-import { Readable } from "stream";
 import { authOptions } from "@/lib/auth";
+import { google } from "googleapis";
+import type { ApiResult } from "@/types";
+import { Readable } from "stream";
 
 export async function POST(req: NextRequest) {
   const session = await getServerSession(authOptions);
   if (!session) return NextResponse.json({ ok: false, error: "Unauthorised" }, { status: 401 });
 
   try {
-    const form = await req.formData();
-    const file = form.get("file") as File | null;
+    const formData = await req.formData();
+    const file = formData.get("file") as File | null;
+
     if (!file) {
-      return NextResponse.json({ ok: false, error: "No file provided" }, { status: 400 });
+      return NextResponse.json<ApiResult>({ ok: false, error: "No file provided" }, { status: 400 });
+    }
+
+    // Size limit: 20MB
+    if (file.size > 20 * 1024 * 1024) {
+      return NextResponse.json<ApiResult>({ ok: false, error: "File too large (max 20MB)" }, { status: 400 });
     }
 
     const token = (session as any).accessToken as string;
-    if (!token) {
-      return NextResponse.json({ ok: false, error: "Missing Google access token" }, { status: 401 });
-    }
-
-    const auth = new google.auth.OAuth2();
+    const auth  = new google.auth.OAuth2();
     auth.setCredentials({ access_token: token });
     const drive = google.drive({ version: "v3", auth });
 
-    const ab = await file.arrayBuffer();
-    const buffer = Buffer.from(ab);
-    const stream = Readable.from(buffer);
+    // Convert File to Buffer
+    const arrayBuffer = await file.arrayBuffer();
+    const buffer      = Buffer.from(arrayBuffer);
+    const stream      = Readable.from(buffer);
 
-    const created = await drive.files.create({
+    // Upload to Drive
+    const driveRes = await drive.files.create({
       requestBody: {
-        name: file.name,
-        mimeType: file.type || "application/octet-stream",
+        name:    file.name,
+        mimeType: file.type,
       },
       media: {
-        mimeType: file.type || "application/octet-stream",
-        body: stream,
+        mimeType: file.type,
+        body:     stream,
       },
-      fields: "id,name",
+      fields: "id,webViewLink,webContentLink",
     });
 
-    const fileId = created.data.id;
-    if (!fileId) {
-      return NextResponse.json({ ok: false, error: "Upload failed: no file ID returned" }, { status: 500 });
-    }
+    const fileId = driveRes.data.id;
+    if (!fileId) throw new Error("Drive upload failed — no file ID returned");
 
+    // Make the file publicly readable
     await drive.permissions.create({
       fileId,
-      requestBody: {
-        role: "reader",
-        type: "anyone",
-      },
+      requestBody: { role: "reader", type: "anyone" },
     });
 
-    const meta = await drive.files.get({
-      fileId,
-      fields: "id,name,webViewLink,webContentLink",
-    });
+    // Build a direct-view URL
+    const url = `https://drive.google.com/file/d/${fileId}/view?usp=sharing`;
 
-    // Direct-download style URL is more reliable for downstream automation modules
-    // (e.g. Instagram/Make.com media fetch) than Drive's interactive viewer link.
-    const directUrl = `https://drive.google.com/uc?export=download&id=${fileId}`;
+    return NextResponse.json<ApiResult>({ ok: true, data: { url, fileId } }, { status: 201 });
 
-    return NextResponse.json({
-      ok: true,
-      data: {
-        id: fileId,
-        name: meta.data.name,
-        url: directUrl,
-        directUrl,
-        viewUrl: meta.data.webViewLink,
-        webContentLink: meta.data.webContentLink,
-      },
-    });
   } catch (err: any) {
-    return NextResponse.json({ ok: false, error: err.message }, { status: 500 });
+    return NextResponse.json<ApiResult>({ ok: false, error: err.message }, { status: 500 });
   }
 }
