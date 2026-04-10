@@ -318,13 +318,13 @@ export default function SchedulePage() {
             display:"flex",alignItems:"center",gap:12,
             padding:"14px 20px",borderBottom: i<filtered.length-1 ? "1px solid var(--border)" : "none",
             transition:"background var(--t-fast) var(--ease)",cursor:"pointer",
-            minWidth:0,
+            minWidth:0,overflow:"hidden",width:"100%",
           }}
           onMouseEnter={e=>(e.currentTarget.style.background="var(--bg-hover)")}
           onMouseLeave={e=>(e.currentTarget.style.background="")}
           onClick={()=>setSelected(post)}>
 
-            <div className="plat-dots" style={{marginTop:2,flexShrink:0}}>
+            <div className="plat-dots" style={{marginTop:2,flexShrink:0,minWidth:0}}>
               {post.platforms.slice(0,3).map(p=>(
                 <div key={p} className="plat-dot"
                   style={{background:PLATFORM_META[p as Platform]?.bg??"var(--bg-input)",color:PLATFORM_META[p as Platform]?.color??"var(--text-3)"}}>
@@ -333,7 +333,7 @@ export default function SchedulePage() {
               ))}
             </div>
 
-            <div className="post-body" style={{minWidth:0,flex:1}}>
+            <div className="post-body" style={{minWidth:0,flex:1,overflow:"hidden"}}>
               <div
                 className="post-preview"
                 title={post.content || "(no content)"}
@@ -341,6 +341,7 @@ export default function SchedulePage() {
                   whiteSpace:"nowrap",
                   overflow:"hidden",
                   textOverflow:"ellipsis",
+                  display:"block",
                   maxWidth:"100%",
                 }}
               >
