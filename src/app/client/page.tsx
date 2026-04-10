@@ -140,7 +140,7 @@ export default function ClientPortal() {
 
   // Load posts
   const loadPosts = useCallback((withIndicator = false) => {
-    if (role !== "client") return;
+    if (role !== "client" && role !== "va") return;
     if (withIndicator) setRefreshing(true);
     fetch("/api/posts").then(r=>r.json())
       .then(res=>{ if(res.ok) setPosts(res.data); })
@@ -160,7 +160,7 @@ export default function ClientPortal() {
   }, [loadPosts]);
 
   useEffect(() => {
-    if (role !== "client") return;
+    if (role !== "client" && role !== "va") return;
     fetch("/api/client/me")
       .then((r) => r.json())
       .then((res) => {
