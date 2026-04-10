@@ -1,7 +1,7 @@
 "use client";
 
-import { useState, useCallback, useEffect, useRef } from "react";
-import { useRouter } from "next/navigation";
+import { useState, useCallback, useEffect, useRef, Suspense } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useSession } from "next-auth/react";
 import { PLATFORM_META, CHAR_LIMITS, type Platform } from "@/types";
 
@@ -18,8 +18,9 @@ function useToast() {
   return { toasts, show };
 }
 
-export default function ComposePage() {
+function ComposeContent() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const { data: session } = useSession();
   const { toasts, show:toast } = useToast();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -38,6 +39,25 @@ export default function ComposePage() {
   const [publishedPostId,setPublishedPostId]= useState<string|null>(null);
   const [postStatus,    setPostStatus]     = useState<string|null>(null);
   const [uploadingMedia,setUploadingMedia] = useState(false);
+
+  // Initialize from query strings (for duplicate feature)
+  useEffect(() => {
+    const contentParam = searchParams.get("content");
+    if (contentParam) setContent(contentParam);
+    const mediaUrlParam = searchParams.get("mediaUrl");
+    if (mediaUrlParam) setMediaUrl(mediaUrlParam);
+    const plats = searchParams.get("plats");
+    if (plats) {
+      const parsed = plats.split(",").filter(Boolean) as Platform[];
+      if (parsed.length > 0) setSelectedPlats(new Set(parsed));
+    }
+    const xParam = searchParams.get("x");
+    if (xParam) { setXOverride(xParam); setOverridesOpen(prev => new Set(prev).add("x")); }
+    const liParam = searchParams.get("li");
+    if (liParam) { setLiOverride(liParam); setOverridesOpen(prev => new Set(prev).add("li")); }
+    const igParam = searchParams.get("ig");
+    if (igParam) { setIgOverride(igParam); setOverridesOpen(prev => new Set(prev).add("ig")); }
+  }, [searchParams]);
 
   // Status polling after Publish Now
   useEffect(() => {
@@ -740,6 +760,14 @@ function PreviewCard({ platform, text, mediaUrl }: { platform:Platform; text:str
       </div>
     </div>
   </div>;
+}
+
+export default function ComposePage() {
+  return (
+    <Suspense fallback={<div className="empty-state"><div className="spinner spinner-lg"/></div>}>
+      <ComposeContent />
+    </Suspense>
+  );
 }
 
 const ico={width:15,height:15,viewBox:"0 0 20 20",fill:"none",stroke:"currentColor",strokeWidth:2,strokeLinecap:"round" as const};

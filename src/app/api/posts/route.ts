@@ -3,6 +3,7 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { createPost, getClients, getPostById, getPosts, getSettings, updatePostRow } from "@/lib/sheets";
 import { sendEmailAsUser } from "@/lib/notify";
+import { resolveRole } from "@/lib/rbac";
 import type { ApiResult, Platform, PostStatus } from "@/types";
 
 function norm(v: string) {
@@ -17,39 +18,59 @@ function getClientPortalUrl(): string {
 }
 
 export async function GET() {
-  const session = await getServerSession(authOptions);
-  if (!session) return NextResponse.json({ ok: false, error: "Unauthorised" }, { status: 401 });
+  const roleResult = await resolveRole();
+  if (!roleResult) return NextResponse.json({ ok: false, error: "Unauthorised" }, { status: 401 });
 
   try {
-    const token = (session as any).accessToken as string;
-    const rows = await getPosts(token);
-    const userEmail = norm((session as any)?.user?.email || "");
+    const rows = await getPosts(roleResult.token);
 
-    // Client users should only see posts associated with their own client record.
-    // VA users keep full visibility across all clients.
-    if (userEmail) {
+    // VA sees everything
+    if (roleResult.role === "va") {
+      return NextResponse.json<ApiResult>({ ok: true, data: rows });
+    }
+
+    // Client sees their own posts
+    if (roleResult.role === "client") {
       try {
-        const clients = await getClients(token);
-        const myClient = clients.find((c) => norm(c.email) === userEmail);
+        const clients = await getClients(roleResult.token);
+        const myClient = clients.find((c) => norm(c.email) === roleResult.email);
         if (myClient) {
-          const myIds = new Set([norm(myClient.id), norm(myClient.name), norm(myClient.email)]);
-          const scoped = rows.filter((p) => myIds.has(norm(p.clientId)));
+          const myIds = new Set([
+            norm(myClient.id), 
+            norm(myClient.name), 
+            norm(myClient.email)
+          ]);
+          
+          const scoped = rows.filter((p) => 
+            myIds.has(norm(p.clientId)) ||
+            norm(p.clientId) === "client" ||
+            norm(p.clientId) === "default" ||
+            p.clientId === ""
+          );
           return NextResponse.json<ApiResult>({ ok: true, data: scoped });
         }
       } catch {
-        // If client lookup fails, fall back to full list so VA workflows keep working.
+        // Fallback if client lookup fails. Allow seeing default items so portal isn't broken.
       }
+      
+      const scopedFallback = rows.filter((p) => 
+        norm(p.clientId) === "client" ||
+        norm(p.clientId) === "default" ||
+        p.clientId === ""
+      );
+      return NextResponse.json<ApiResult>({ ok: true, data: scopedFallback });
     }
 
-    return NextResponse.json<ApiResult>({ ok: true, data: rows });
+    return NextResponse.json<ApiResult>({ ok: true, data: [] });
   } catch (err: any) {
     return NextResponse.json<ApiResult>({ ok: false, error: err.message }, { status: 500 });
   }
 }
 
 export async function POST(req: NextRequest) {
-  const session = await getServerSession(authOptions);
-  if (!session) return NextResponse.json({ ok: false, error: "Unauthorised" }, { status: 401 });
+  const roleResult = await resolveRole();
+  if (!roleResult) return NextResponse.json({ ok: false, error: "Unauthorised" }, { status: 401 });
+  if (roleResult.role !== "va") return NextResponse.json({ ok: false, error: "Only the VA can create posts" }, { status: 403 });
 
   try {
     const body = await req.json();
@@ -67,28 +88,29 @@ export async function POST(req: NextRequest) {
 
     const clientId = String(body.clientId || "client");
     const requestedStatus = (body.status ?? "draft") as PostStatus;
-    const token = (session as any).accessToken as string;
+    const token = roleResult.token;
     let finalStatus: PostStatus = requestedStatus;
 
     // Enforce client approval mode based on the Clients sheet.
     // If this client requires approval, scheduling should go to "pending" first.
+    let matchedClient: Awaited<ReturnType<typeof getClients>>[number] | null = null;
     try {
       const clients = await getClients(token);
-      const match = clients.find(
+      matchedClient = clients.find(
         (c) =>
           norm(c.id) === norm(clientId) ||
           norm(c.name) === norm(clientId) ||
           norm(c.email) === norm(clientId)
-      );
+      ) ?? null;
 
-      if (match?.approvalRequired && requestedStatus === "approved") {
+      if (matchedClient?.approvalRequired && requestedStatus === "approved") {
         finalStatus = "pending";
       }
     } catch {
       // If client lookup fails, keep requested status to avoid blocking post creation.
     }
 
-    const id = await createPost((session as any).accessToken as string, {
+    const id = await createPost(token, {
       clientId,
       content,
       liOverride: body.liOverride || undefined,
@@ -103,16 +125,10 @@ export async function POST(req: NextRequest) {
 
     if (finalStatus === "pending") {
       try {
-        const clients = await getClients(token);
-        const match = clients.find(
-          (c) =>
-            norm(c.id) === norm(clientId) ||
-            norm(c.name) === norm(clientId) ||
-            norm(c.email) === norm(clientId)
-        );
+        // Reuse matchedClient from above — no duplicate API call
         const settings = await getSettings(token);
         const clientEmail =
-          (match?.email && match.email.trim()) ||
+          (matchedClient?.email && matchedClient.email.trim()) ||
           (settings["CLIENT_EMAIL"] || "").trim();
         const portal = getClientPortalUrl();
         if (clientEmail) {

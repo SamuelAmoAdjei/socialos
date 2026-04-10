@@ -89,7 +89,7 @@ export default function SchedulePage() {
       if (res.ok) {
         setPosts(p=>p.filter(x=>x.id!==post.id));
         setSelected(null);
-        showToast("Post deleted","true" as any);
+        showToast("Post deleted", true);
       } else {
         showToast(res.error||"Delete failed", false);
       }
@@ -507,7 +507,18 @@ export default function SchedulePage() {
               <div style={{flex:1,minWidth:8}}/>
               <button className="btn btn-secondary" onClick={()=>setSelected(null)}>Close</button>
               <button className="btn btn-primary"
-                onClick={()=>{router.push("/dashboard/compose");setSelected(null);}}>
+                onClick={()=>{
+                  const params = new URLSearchParams({
+                    content: selected.content,
+                    plats: selected.platforms.join(","),
+                    mediaUrl: selected.mediaUrl || "",
+                    x: selected.xOverride || "",
+                    li: selected.liOverride || "",
+                    ig: selected.igOverride || ""
+                  });
+                  router.push(`/dashboard/compose?${params.toString()}`);
+                  setSelected(null);
+                }}>
                 Duplicate
               </button>
             </div>

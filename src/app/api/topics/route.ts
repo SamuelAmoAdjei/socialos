@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
-import { createPost, getSettings } from "@/lib/sheets";
+import { appendDraftTopic, getSettings } from "@/lib/sheets";
 import type { ApiResult, Platform } from "@/types";
 
 async function getAppsScriptUrl(token: string): Promise<string> {
@@ -40,14 +40,14 @@ export async function POST(req: NextRequest) {
     let directWriteError: string | null = null;
 
     try {
-      directWriteId = await createPost(token, {
-        clientId:    body.clientId || requestedBy || "client",
-        content:     `[TOPIC IDEA] ${content}`,
-        platforms,
-        mediaUrl:    body.mediaUrl || undefined,
-        scheduledAt: "",
-        status:      "draft",
+      await appendDraftTopic(token, {
+        docLink:     body.mediaUrl || undefined,
+        title:       content,
+        platforms:   platforms.join(", "),
+        stage:       "idea",
+        notes:       `Submitted by: ${requestedBy}\n${body.notes || ""}`,
       });
+      directWriteId = "draft_" + Date.now();
     } catch (err: any) {
       directWriteError = err.message;
     }

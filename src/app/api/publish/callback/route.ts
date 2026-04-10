@@ -7,6 +7,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getPostById, updatePostRow, appendLog, appendAnalytics, getClients, getSettings } from "@/lib/sheets";
 import { sendEmailAsUser } from "@/lib/notify";
 import type { Platform } from "@/types";
+import { createHmac } from "crypto";
 
 function norm(v: string) {
   return String(v || "").trim().toLowerCase();
@@ -27,9 +28,18 @@ export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
 
-    // Verify shared secret if configured
+    // Verify auth: HMAC signature (preferred) OR shared secret header (backward compat)
     const incomingSecret = req.headers.get("x-socialos-secret") ?? body.secret ?? "";
-    if (CALLBACK_SECRET && incomingSecret !== CALLBACK_SECRET) {
+    const incomingSignature = body.signature ?? "";
+    const postIdForHmac = body.post_id || body.postId || "";
+
+    let hmacValid = false;
+    if (CALLBACK_SECRET && incomingSignature && postIdForHmac) {
+      const expected = createHmac("sha256", CALLBACK_SECRET).update(postIdForHmac).digest("hex");
+      hmacValid = expected === incomingSignature;
+    }
+
+    if (CALLBACK_SECRET && !hmacValid && incomingSecret !== CALLBACK_SECRET) {
       return NextResponse.json({ ok: false, error: "Forbidden" }, { status: 403 });
     }
 

@@ -208,6 +208,30 @@ export async function getDraftTopics(accessToken: string): Promise<DraftTopicRow
   }));
 }
 
+/** Append a new row to the Drafts tab (for client topic submissions). */
+export async function appendDraftTopic(
+  accessToken: string,
+  topic: { docLink?: string; title: string; platforms: string; targetDate?: string; stage?: string; notes?: string }
+): Promise<void> {
+  const api = shts(accessToken);
+  const rng = await range(accessToken, "Drafts", "A:F");
+  await api.spreadsheets.values.append({
+    spreadsheetId:    SHEET_ID,
+    range:            rng,
+    valueInputOption: "USER_ENTERED",
+    requestBody: {
+      values: [[
+        topic.docLink ?? "",
+        topic.title,
+        topic.platforms,
+        topic.targetDate ?? new Date().toISOString(),
+        topic.stage ?? "idea",
+        topic.notes ?? "",
+      ]],
+    },
+  });
+}
+
 function normEmail(s: string) {
   return (s ?? "").toLowerCase().trim();
 }

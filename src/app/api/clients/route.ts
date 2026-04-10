@@ -3,6 +3,7 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { getClients, createClient } from "@/lib/sheets";
 import { google } from "googleapis";
+import { resolveRole } from "@/lib/rbac";
 import type { ApiResult } from "@/types";
 
 const SHEET_ID = process.env.GOOGLE_SHEETS_ID!;
@@ -19,11 +20,12 @@ export async function GET() {
 }
 
 export async function POST(req: NextRequest) {
-  const session = await getServerSession(authOptions);
-  if (!session) return NextResponse.json({ ok:false, error:"Unauthorised" }, { status:401 });
+  const roleResult = await resolveRole();
+  if (!roleResult) return NextResponse.json({ ok:false, error:"Unauthorised" }, { status:401 });
+  if (roleResult.role !== "va") return NextResponse.json({ ok:false, error:"Only the VA can manage clients" }, { status:403 });
   try {
     const body = await req.json();
-    const token = (session as any).accessToken as string;
+    const token = roleResult.token;
 
     // Update existing client when clientId is provided.
     if (body.clientId) {
@@ -74,13 +76,14 @@ export async function POST(req: NextRequest) {
 }
 
 export async function DELETE(req: NextRequest) {
-  const session = await getServerSession(authOptions);
-  if (!session) return NextResponse.json({ ok:false, error:"Unauthorised" }, { status:401 });
+  const roleResult = await resolveRole();
+  if (!roleResult) return NextResponse.json({ ok:false, error:"Unauthorised" }, { status:401 });
+  if (roleResult.role !== "va") return NextResponse.json({ ok:false, error:"Only the VA can delete clients" }, { status:403 });
   try {
     const { clientId } = await req.json();
     if (!clientId) return NextResponse.json({ ok:false, error:"Missing clientId" }, { status:400 });
 
-    const token = (session as any).accessToken as string;
+    const token = roleResult.token;
 
     // Find the row index of this client
     const clients = await getClients(token);

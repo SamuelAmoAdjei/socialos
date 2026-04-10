@@ -89,5 +89,5 @@ export const PLATFORM_META: Record<Platform, { label: string; short: string; col
   instagram: { label: "Instagram", short: "IG", color: "#E1306C", bg: "rgba(225,48,108,0.12)" },
   facebook:  { label: "Facebook",  short: "FB", color: "#1877F2", bg: "rgba(24,119,242,0.12)" },
   x:         { label: "X",         short: "X",  color: "#888888", bg: "rgba(255,255,255,0.08)"},
-  tiktok:    { label: "TikTok",    short: "TT", color: "#888888", bg: "rgba(0,0,0,0.15)"      },
+  tiktok:    { label: "TikTok",    short: "TT", color: "#69C9D0", bg: "rgba(105,201,208,0.15)"},
 };

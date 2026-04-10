@@ -2,7 +2,9 @@ import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { createPost, getSettings, appendLog, updatePostRow, getPosts, getClients } from "@/lib/sheets";
+import { resolveRole } from "@/lib/rbac";
 import type { ApiResult, Platform } from "@/types";
+import { createHmac } from "crypto";
 
 function getBaseUrl(req: NextRequest): string {
   const envUrl = process.env.NEXTAUTH_URL || process.env.NEXT_PUBLIC_APP_URL;
@@ -18,10 +20,11 @@ function norm(v: string) {
 }
 
 export async function POST(req: NextRequest) {
-  const session = await getServerSession(authOptions);
-  if (!session) return NextResponse.json({ ok:false, error:"Unauthorised — please sign in" }, { status:401 });
+  const roleResult = await resolveRole();
+  if (!roleResult) return NextResponse.json({ ok:false, error:"Unauthorised — please sign in" }, { status:401 });
+  if (roleResult.role !== "va") return NextResponse.json({ ok:false, error:"Only the VA can publish posts directly" }, { status:403 });
 
-  const token = (session as any).accessToken as string;
+  const token = roleResult.token;
   if (!token)  return NextResponse.json({ ok:false, error:"No access token — sign out and sign back in" }, { status:401 });
 
   try {
@@ -101,6 +104,12 @@ export async function POST(req: NextRequest) {
     const baseUrl     = getBaseUrl(req);
     const callbackUrl = `${baseUrl}/api/publish/callback`;
 
+    // Generate HMAC signature so the callback can authenticate without raw tokens
+    const callbackSecret = process.env.MAKE_CALLBACK_SECRET ?? "";
+    const signature = callbackSecret
+      ? createHmac("sha256", callbackSecret).update(id).digest("hex")
+      : "";
+
     const payload = {
       post_id:          id,
       // ── Simple text fields for Make.com ──
@@ -117,7 +126,7 @@ export async function POST(req: NextRequest) {
       platforms:        selectedPlatforms,
       media_url:        body.mediaUrl || null,
       callback_url:     callbackUrl,
-      access_token:     token,                    // Make.com passes this back to callback
+      signature,                                  // HMAC for callback auth — NOT an OAuth token
     };
 
     const makeRes = await fetch(webhookUrl, {

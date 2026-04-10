@@ -205,8 +205,12 @@ export default function SettingsPage() {
                 onClick={()=>setToggles(p=>({...p,[t.key]:!p[t.key as keyof typeof p]}))}/>
             </div>
           ))}
-          <div style={{marginTop:16,fontSize:"0.75rem",color:"var(--text-3)",lineHeight:1.7,padding:"10px 12px",background:"var(--bg-input)",borderRadius:"var(--radius-sm)",border:"1px solid var(--border)"}}>
-            These toggle states are local to your session. Actual automation is controlled by Apps Script and Make.com.
+          <div style={{marginTop:24,padding:"12px 16px",background:"rgba(245,158,11,0.1)",borderRadius:"var(--radius-md)",border:"1px solid rgba(245,158,11,0.2)",display:"flex",gap:12,alignItems:"flex-start"}}>
+            <svg style={{width:18,height:18,marginTop:1,color:"var(--gold)"}} viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round"><path d="M10 18a8 8 0 100-16 8 8 0 000 16zM10 6v5M10 14h.01"/></svg>
+            <div style={{fontSize:"0.8rem",color:"var(--text-2)",lineHeight:1.6}}>
+              <strong style={{color:"var(--gold)",display:"block",marginBottom:4}}>UI Demonstration Only</strong>
+              These toggles are cosmetic placeholders to demonstrate future functionality. Actual automation (approval routing, auto-retries, etc.) is hardcoded into Apps Script and your Make.com scenarios.
+            </div>
           </div>
         </>}
 

@@ -23,6 +23,7 @@ export async function GET() {
 
   const userEmail = norm(session.user.email);
   const debug: Record<string, string> = { userEmail };
+  const isDev = process.env.NODE_ENV === "development";
 
   // ── STEP 1: Env vars (set in Vercel → Settings → Environment Variables) ──
   const vaEnv     = norm(process.env.VA_EMAIL     ?? "");
@@ -32,10 +33,10 @@ export async function GET() {
   debug.CLIENT_EMAIL_ENV = clientEnv || "(NOT SET IN VERCEL)";
 
   if (vaEnv && userEmail === vaEnv) {
-    return NextResponse.json({ role: "va", source: "env", userEmail, debug });
+    return NextResponse.json({ role: "va", source: "env", ...(isDev ? { userEmail, debug } : {}) });
   }
   if (clientEnv && userEmail === clientEnv) {
-    return NextResponse.json({ role: "client", source: "env", userEmail, debug });
+    return NextResponse.json({ role: "client", source: "env", ...(isDev ? { userEmail, debug } : {}) });
   }
 
   // ── STEP 2: Sheet Settings tab ───────────────────────────────────────────
@@ -69,17 +70,26 @@ export async function GET() {
     debug.ALL_SETTINGS_KEYS  = Object.keys(settings).join(", ");
 
     if (vaSheet && userEmail === vaSheet) {
-      return NextResponse.json({ role: "va", source: "sheet", userEmail, debug });
+      return NextResponse.json({ role: "va", source: "sheet", ...(isDev ? { userEmail, debug } : {}) });
     }
     if (clientSheet && userEmail === clientSheet) {
-      return NextResponse.json({ role: "client", source: "sheet", userEmail, debug });
+      return NextResponse.json({ role: "client", source: "sheet", ...(isDev ? { userEmail, debug } : {}) });
     }
+
+    // Step 3: Check Clients sheet for multi-client support
+    try {
+      const { getClients } = await import("@/lib/sheets");
+      const clients = await getClients(token);
+      const match = clients.find((c) => norm(c.email) === userEmail);
+      if (match) {
+        return NextResponse.json({ role: "client", source: "clients_sheet", ...(isDev ? { userEmail, debug } : {}) });
+      }
+    } catch { /* clients lookup failed */ }
 
     return NextResponse.json({
       role: "none",
       source: "sheet",
-      userEmail,
-      debug,
+      ...(isDev ? { userEmail, debug } : {}),
       FIX: "Add VA_EMAIL and CLIENT_EMAIL to Vercel environment variables, or fill them in your Settings sheet B3 and B4",
     });
 
@@ -88,9 +98,8 @@ export async function GET() {
     return NextResponse.json({
       role: "none",
       source: "error",
-      userEmail,
-      debug,
-      FIX: "CRITICAL: Set VA_EMAIL=" + userEmail + " in Vercel Environment Variables to fix this immediately",
+      ...(isDev ? { userEmail, debug } : {}),
+      FIX: "Set VA_EMAIL in Vercel Environment Variables to fix this",
     });
   }
 }
