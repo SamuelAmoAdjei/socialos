@@ -33,7 +33,24 @@ export async function GET() {
     if (roleResult.role === "client") {
       try {
         const clients = await getClients(roleResult.token);
-        const myClient = clients.find((c) => norm(c.email) === roleResult.email);
+        
+        // Match 1: By exact email
+        let myClient = clients.find((c) => norm(c.email) === roleResult.email);
+
+        // Match 2: Fallback to Google Account name if email mismatched
+        if (!myClient) {
+          const session = await getServerSession(authOptions);
+          if (session?.user?.name) {
+            const sessionName = norm(session.user.name);
+            myClient = clients.find(c => norm(c.name) === sessionName);
+          }
+        }
+        
+        // Match 3: If user is the primary master env client AND there's only 1 client in the spreadsheet, assume it's them
+        if (!myClient && clients.length === 1 && roleResult.email === norm(process.env.CLIENT_EMAIL || "")) {
+          myClient = clients[0];
+        }
+
         if (myClient) {
           const myIds = new Set([
             norm(myClient.id), 

@@ -30,7 +30,22 @@ export async function GET() {
 
   try {
     const clients = await getClients(token);
-    const me = clients.find((c) => norm(c.email) === email);
+    
+    // Match 1: By exact email
+    let me = clients.find((c) => norm(c.email) === email);
+
+    // Match 2: By Google Account name
+    if (!me && session.user?.name) {
+      const sessionName = norm(session.user.name);
+      me = clients.find((c) => norm(c.name) === sessionName);
+    }
+
+    // Match 3: Fallback if they are primary env var client and there is only 1 row
+    const envClient = norm(process.env.CLIENT_EMAIL || "");
+    if (!me && clients.length === 1 && envClient === email) {
+      me = clients[0];
+    }
+
     if (!me) {
       return NextResponse.json<ApiResult>({ ok: false, error: "No client record for your email" }, { status: 404 });
     }
