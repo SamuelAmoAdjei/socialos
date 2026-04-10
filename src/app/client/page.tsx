@@ -143,7 +143,14 @@ export default function ClientPortal() {
     if (role !== "client" && role !== "va") return;
     if (withIndicator) setRefreshing(true);
     fetch("/api/posts").then(r=>r.json())
-      .then(res=>{ if(res.ok) setPosts(res.data); })
+      .then(res=>{
+        if(res.ok) {
+          setPosts(res.data);
+        } else {
+          console.error("loadPosts API Error:", res.error);
+          showToast(`API Error: ${res.error || "Failed to load posts"}`, "error");
+        }
+      })
       .finally(()=>{
         setPostsLoading(false);
         if (withIndicator) {
