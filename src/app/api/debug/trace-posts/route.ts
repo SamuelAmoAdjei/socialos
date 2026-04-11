@@ -12,13 +12,24 @@ export async function GET(req: NextRequest) {
   const result: any = { steps: [] };
 
   try {
+    const url = new URL(req.url);
+    const testEmail = url.searchParams.get("testEmail");
+
     result.steps.push({ step: "1. Resolving Role" });
     const roleResult = await resolveRole();
     if (!roleResult) {
       result.steps.push({ status: "Failed", reason: "resolveRole returned null" });
       return NextResponse.json(result);
     }
-    result.steps.push({ status: "Success", roleResult: { role: roleResult.role, email: roleResult.email } });
+    
+    // Override if testing
+    const activeEmail = testEmail ? norm(testEmail) : roleResult.email;
+    const activeRole = testEmail ? "client" : roleResult.role;
+    
+    result.steps.push({ 
+      status: "Success", 
+      roleResult: { role: activeRole, email: activeEmail, originalRole: roleResult.role, testing: !!testEmail } 
+    });
 
     result.steps.push({ step: "2. Fetching Session" });
     const session = await getServerSession(authOptions);
@@ -34,13 +45,13 @@ export async function GET(req: NextRequest) {
       return NextResponse.json(result);
     }
 
-    if (roleResult.role === "va") {
+    if (activeRole === "va" && !testEmail) {
       result.steps.push({ step: "4. Role is VA, returning everything." });
       result.data = rows;
       return NextResponse.json(result);
     }
 
-    result.steps.push({ step: "4. Role is Client. Calling getClients" });
+    result.steps.push({ step: "4. Treating as Client. Calling getClients" });
     let clients;
     try {
       clients = await getClients(roleResult.token);
@@ -51,11 +62,11 @@ export async function GET(req: NextRequest) {
     }
 
     result.steps.push({ step: "5. Matching client profile" });
-    let myClient = clients.find((c) => norm(c.email) === roleResult.email);
+    let myClient = clients.find((c) => norm(c.email) === activeEmail);
     let matchedBy = "Exact Email";
 
     if (!myClient) {
-      result.steps.push({ log: `Failed to match exact email: ${roleResult.email}` });
+      result.steps.push({ log: `Failed to match exact email: ${activeEmail}` });
       if (session?.user?.name) {
         const sessionName = norm(session.user.name);
         myClient = clients.find(c => norm(c.name) === sessionName);
@@ -63,7 +74,7 @@ export async function GET(req: NextRequest) {
       }
     }
 
-    if (!myClient && clients.length === 1 && roleResult.email === norm(process.env.CLIENT_EMAIL || "")) {
+    if (!myClient && clients.length === 1 && activeEmail === norm(process.env.CLIENT_EMAIL || "")) {
       result.steps.push({ log: "Failed to match Name, deploying single-client fallback" });
       myClient = clients[0];
       matchedBy = "Single Client Sheet Fallback";
