@@ -1,19 +1,102 @@
 /**
  * lib/sheets.ts — server-side only.
- * Fixed: tab resolver now gracefully falls back, no silent failures on createPost.
+ *
+ * AUTH STRATEGY (in priority order):
+ * 1. Google Service Account (GOOGLE_SERVICE_ACCOUNT_KEY env var, base64-encoded JSON)
+ *    → Always has access regardless of who is logged in. Best for production.
+ * 2. VA Token Relay (VA_REFRESH_TOKEN env var)
+ *    → Uses the VA's OAuth refresh token to get a fresh access token.
+ *    → Works without service account or sheet sharing. Good for org-managed accounts.
+ * 3. User's own OAuth access token (from NextAuth session)
+ *    → Works only when the Sheet is shared with the user.
  */
 import { google } from "googleapis";
 import type { Post, Client, AnalyticsRow, PostStatus, Platform } from "@/types";
 
 const SHEET_ID = process.env.GOOGLE_SHEETS_ID!;
 
+// ── Strategy 1: Service Account (cached singleton) ────────────────────────────
+let _serviceAuth: ReturnType<typeof google.auth.GoogleAuth.prototype.getClient> extends Promise<infer T> ? T : never;
+let _serviceAuthResolved = false;
+
+function getServiceAuth() {
+  if (_serviceAuthResolved) return _serviceAuth ? google.sheets({ version: "v4", auth: _serviceAuth as any }) : null;
+  _serviceAuthResolved = true;
+  const raw = process.env.GOOGLE_SERVICE_ACCOUNT_KEY;
+  if (!raw) return null;
+  try {
+    const key = JSON.parse(Buffer.from(raw, "base64").toString("utf-8"));
+    const auth = new google.auth.GoogleAuth({
+      credentials: key,
+      scopes: ["https://www.googleapis.com/auth/spreadsheets"],
+    });
+    _serviceAuth = auth as any;
+    return google.sheets({ version: "v4", auth: auth as any });
+  } catch (e) {
+    console.error("[SocialOS] Failed to parse GOOGLE_SERVICE_ACCOUNT_KEY:", e);
+    return null;
+  }
+}
+
+// ── Strategy 2: VA Token Relay ────────────────────────────────────────────────
+// Set VA_REFRESH_TOKEN in Vercel. The VA can find their token at /api/admin/relay-token.
+let _vaAccessToken: string | null = null;
+let _vaTokenExpiry = 0;
+
+/**
+ * Call at the start of every public async function.
+ * Refreshes the VA's access token from their stored refresh token if needed.
+ */
+async function ensureVaRelay(): Promise<void> {
+  // Skip if service account is available (preferred)
+  if (getServiceAuth()) return;
+
+  const refreshToken = process.env.VA_REFRESH_TOKEN;
+  if (!refreshToken) return;
+
+  // Return if cached token is still valid
+  if (_vaAccessToken && Date.now() < _vaTokenExpiry) return;
+
+  try {
+    const response = await fetch("https://oauth2.googleapis.com/token", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        client_id:     process.env.GOOGLE_CLIENT_ID!,
+        client_secret: process.env.GOOGLE_CLIENT_SECRET!,
+        grant_type:    "refresh_token",
+        refresh_token: refreshToken,
+      }),
+    });
+    const data = await response.json();
+    if (!response.ok) {
+      console.error("[SocialOS] VA token relay refresh failed:", data);
+      return;
+    }
+    _vaAccessToken = data.access_token;
+    _vaTokenExpiry = Date.now() + ((data.expires_in ?? 3600) - 60) * 1000;
+  } catch (e) {
+    console.error("[SocialOS] VA token relay error:", e);
+  }
+}
+
+// ── User OAuth fallback ───────────────────────────────────────────────────────
 function getAuth(accessToken: string) {
   const auth = new google.auth.OAuth2();
   auth.setCredentials({ access_token: accessToken });
   return auth;
 }
+
+/**
+ * Returns a Google Sheets API client using the best available auth.
+ * Priority: Service Account → VA Relay Token → User's own token.
+ */
 function shts(accessToken: string) {
-  return google.sheets({ version: "v4", auth: getAuth(accessToken) });
+  const sa = getServiceAuth();
+  if (sa) return sa;
+  // Use VA relay token if available, otherwise the caller's token
+  const effectiveToken = _vaAccessToken || accessToken;
+  return google.sheets({ version: "v4", auth: getAuth(effectiveToken) });
 }
 
 // ── Tab name resolver ─────────────────────────────────────────────────────────
@@ -77,6 +160,7 @@ function rowToClient(row: string[]): Client {
 // ── POSTS ─────────────────────────────────────────────────────────────────────
 
 export async function getPosts(accessToken: string): Promise<(Post & { rowIndex: number })[]> {
+  await ensureVaRelay();
   const api = shts(accessToken);
   const rng = await range(accessToken, "Posts", "A2:O");
   const res = await api.spreadsheets.values.get({ spreadsheetId: SHEET_ID, range: rng });
@@ -95,6 +179,7 @@ export async function createPost(
   accessToken: string,
   data: Omit<Post, "id" | "createdAt" | "publishedAt" | "platformPostIds" | "errorMsg">
 ): Promise<string> {
+  await ensureVaRelay();
   if (!accessToken) throw new Error("No access token — please sign out and sign back in");
   if (!SHEET_ID)    throw new Error("GOOGLE_SHEETS_ID environment variable is not set");
 
@@ -148,6 +233,7 @@ export async function updatePostRow(
     igOverride:      string;
   }>
 ) {
+  await ensureVaRelay();
   const api     = shts(accessToken);
   const tabName = await resolveTab(accessToken, "Posts");
   const colMap: Record<string,string> = {
@@ -194,6 +280,7 @@ export type DraftTopicRow = {
 
 /** Client-submitted topics and ideas in the Drafts tab (best-effort). */
 export async function getDraftTopics(accessToken: string): Promise<DraftTopicRow[]> {
+  await ensureVaRelay();
   const api = shts(accessToken);
   const rng = await range(accessToken, "Drafts", "A2:F");
   const res = await api.spreadsheets.values.get({ spreadsheetId: SHEET_ID, range: rng });
@@ -213,6 +300,7 @@ export async function appendDraftTopic(
   accessToken: string,
   topic: { docLink?: string; title: string; platforms: string; targetDate?: string; stage?: string; notes?: string }
 ): Promise<void> {
+  await ensureVaRelay();
   const api = shts(accessToken);
   const rng = await range(accessToken, "Drafts", "A:F");
   await api.spreadsheets.values.append({
@@ -241,6 +329,7 @@ export async function updateClientApprovalRequired(
   clientEmail: string,
   approvalRequired: boolean
 ): Promise<void> {
+  await ensureVaRelay();
   const api = shts(accessToken);
   const tabName = await resolveTab(accessToken, "Clients");
   const res = await api.spreadsheets.values.get({
@@ -262,6 +351,7 @@ export async function updateClientApprovalRequired(
 // ── CLIENTS ───────────────────────────────────────────────────────────────────
 
 export async function getClients(accessToken: string): Promise<Client[]> {
+  await ensureVaRelay();
   const api = shts(accessToken);
   const rng = await range(accessToken, "Clients", "A2:H");
   const res = await api.spreadsheets.values.get({ spreadsheetId: SHEET_ID, range: rng });
@@ -280,6 +370,7 @@ export async function createClient(
   accessToken: string,
   client: Omit<Client, "createdAt">
 ): Promise<string> {
+  await ensureVaRelay();
   const api = shts(accessToken);
   const id  = "client_" + Date.now();
   const rng = await range(accessToken, "Clients", "A:H");
@@ -302,6 +393,7 @@ export async function createClient(
 // ── SETTINGS ─────────────────────────────────────────────────────────────────
 
 export async function getSettings(accessToken: string): Promise<Record<string,string>> {
+  await ensureVaRelay();
   const api = shts(accessToken);
   const rng = await range(accessToken, "Settings", "A1:B20");
   const res = await api.spreadsheets.values.get({ spreadsheetId: SHEET_ID, range: rng });
@@ -321,6 +413,7 @@ export async function updateSettings(
   accessToken: string,
   updates: Record<string,string>
 ) {
+  await ensureVaRelay();
   const api     = shts(accessToken);
   const tabName = await resolveTab(accessToken, "Settings");
   const res     = await api.spreadsheets.values.get({
@@ -348,6 +441,7 @@ export async function getAnalytics(
   accessToken: string,
   options?: { platform?: string; limit?: number }
 ): Promise<AnalyticsRow[]> {
+  await ensureVaRelay();
   const api = shts(accessToken);
   const rng = await range(accessToken, "Analytics", "A2:L");
   const res = await api.spreadsheets.values.get({ spreadsheetId: SHEET_ID, range: rng });
@@ -374,6 +468,7 @@ export async function appendAnalytics(
   accessToken: string,
   rows: Omit<AnalyticsRow, "engagementRate">[]
 ) {
+  await ensureVaRelay();
   const api = shts(accessToken);
   const rng = await range(accessToken, "Analytics", "A:L");
   const values = rows.map(rw => {
@@ -401,6 +496,7 @@ export async function appendLog(
   action: string,
   details = ""
 ) {
+  await ensureVaRelay();
   const api = shts(accessToken);
   const rng = await range(accessToken, "Log", "A:E");
   await api.spreadsheets.values.append({

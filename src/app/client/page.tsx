@@ -83,12 +83,10 @@ export default function ClientPortal() {
   const [clientName, setClientName] = useState<string>("");
   useEffect(() => {
     if (session?.user?.email) {
-      fetch("/api/clients").then(r=>r.json()).then(res => {
-        if (res.ok && Array.isArray(res.data)) {
-          const match = res.data.find((c:any) =>
-            (c.email ?? "").toLowerCase().trim() === (session.user!.email ?? "").toLowerCase().trim()
-          );
-          if (match?.name) setClientName(match.name);
+      // Use the dedicated /api/client/me endpoint — it handles matching and fallbacks
+      fetch("/api/client/me").then(r=>r.json()).then(res => {
+        if (res.ok && res.data?.name) {
+          setClientName(res.data.name);
         }
       }).catch(()=>{});
     }

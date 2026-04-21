@@ -39,31 +39,16 @@ export async function GET() {
     return NextResponse.json({ role: "client", source: "env", ...(isDev ? { userEmail, debug } : {}) });
   }
 
-  // ── STEP 2: Sheet Settings tab ───────────────────────────────────────────
+  // ── STEP 2: Sheet Settings tab (uses service account if configured) ─────
   try {
     const token = (session as any).accessToken as string;
     if (!token) throw new Error("No access token");
 
-    // Read Settings tab directly without going through the sheets lib
-    // to avoid any tab-resolver caching issues
-    const { google } = await import("googleapis");
-    const auth = new google.auth.OAuth2();
-    auth.setCredentials({ access_token: token });
-    const api = google.sheets({ version: "v4", auth });
+    const { getSettings, getClients } = await import("@/lib/sheets");
+    const settings = await getSettings(token);
 
-    const sheetId = process.env.GOOGLE_SHEETS_ID!;
-    const res = await api.spreadsheets.values.get({
-      spreadsheetId: sheetId,
-      range: "Settings!A1:B20",
-    });
-
-    const rows = res.data.values ?? [];
-    const settings: Record<string,string> = {};
-    rows.forEach(([k, v]) => { if (k) settings[norm(String(k))] = norm(String(v ?? "")); });
-
-    // Try both lowercase and uppercase versions of the key
-    const vaSheet     = settings["va_email"]     || settings["VA_EMAIL"]     || "";
-    const clientSheet = settings["client_email"] || settings["CLIENT_EMAIL"] || "";
+    const vaSheet     = norm(settings["VA_EMAIL"]     || settings["va_email"]     || "");
+    const clientSheet = norm(settings["CLIENT_EMAIL"] || settings["client_email"] || "");
 
     debug.VA_EMAIL_SHEET     = vaSheet     || "(empty in Settings tab)";
     debug.CLIENT_EMAIL_SHEET = clientSheet || "(empty in Settings tab)";
@@ -78,7 +63,6 @@ export async function GET() {
 
     // Step 3: Check Clients sheet for multi-client support
     try {
-      const { getClients } = await import("@/lib/sheets");
       const clients = await getClients(token);
       const match = clients.find((c) => norm(c.email) === userEmail);
       if (match) {

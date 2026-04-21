@@ -43,28 +43,15 @@ export async function resolveRole(): Promise<RoleResult | null> {
   if (vaEnv && email === vaEnv) return { role: "va", email, token };
   if (clientEnv && email === clientEnv) return { role: "client", email, token };
 
-  // Step 2: Check Settings sheet
+  // Step 2: Check Settings sheet (uses service account if configured)
   try {
-    const { google } = await import("googleapis");
-    const auth = new google.auth.OAuth2();
-    auth.setCredentials({ access_token: token });
-    const api = google.sheets({ version: "v4", auth });
-    const sheetId = process.env.GOOGLE_SHEETS_ID!;
+    const { getSettings } = await import("@/lib/sheets");
+    const settings = await getSettings(token);
 
-    const res = await api.spreadsheets.values.get({
-      spreadsheetId: sheetId,
-      range: "Settings!A1:B20",
-    });
-    const rows = res.data.values ?? [];
-    const settings: Record<string, string> = {};
-    rows.forEach(([k, v]) => {
-      if (k) settings[norm(String(k))] = norm(String(v ?? ""));
-    });
+    const vaSheet     = norm(settings["VA_EMAIL"]     || settings["va_email"]     || "");
+    const clientSheet = norm(settings["CLIENT_EMAIL"] || settings["client_email"] || "");
 
-    const vaSheet = settings["va_email"] || "";
-    const clientSheet = settings["client_email"] || "";
-
-    if (vaSheet && email === vaSheet) return { role: "va", email, token };
+    if (vaSheet && email === vaSheet)         return { role: "va", email, token };
     if (clientSheet && email === clientSheet) return { role: "client", email, token };
   } catch {
     // Settings lookup failed — continue to clients check

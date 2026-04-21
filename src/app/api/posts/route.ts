@@ -52,11 +52,18 @@ export async function GET() {
         }
 
         if (myClient) {
+          // Build a comprehensive set of IDs this client could be filed under
           const myIds = new Set([
             norm(myClient.id), 
             norm(myClient.name), 
-            norm(myClient.email)
-          ]);
+            norm(myClient.email),
+          ].filter(Boolean));
+          
+          // Also add CLIENT_EMAIL env var if it matches this client
+          const envClientEmail = norm(process.env.CLIENT_EMAIL || "");
+          if (envClientEmail && envClientEmail === norm(myClient.email)) {
+            myIds.add(envClientEmail);
+          }
           
           const scoped = rows.filter((p) => 
             myIds.has(norm(p.clientId)) ||
@@ -70,6 +77,14 @@ export async function GET() {
         // Fallback if client lookup fails. Allow seeing default items so portal isn't broken.
       }
       
+      // No matching Clients row found.
+      // If this is the primary (env-var) client, they should see ALL posts — single-client setup.
+      const envClientEmail = norm(process.env.CLIENT_EMAIL || "");
+      if (envClientEmail && roleResult.email === envClientEmail) {
+        return NextResponse.json<ApiResult>({ ok: true, data: rows });
+      }
+
+      // True fallback — unknown client, show only explicitly open posts
       const scopedFallback = rows.filter((p) => 
         norm(p.clientId) === "client" ||
         norm(p.clientId) === "default" ||
